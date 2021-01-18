@@ -1,0 +1,76 @@
+ZWAIT_DELTA_MERGE
+FUNCTION ZWAIT_DELTA_MERGE.
+*"----------------------------------------------------------------------
+*"*"Локальный интерфейс:
+*"  IMPORTING
+*"     REFERENCE(IN_TABLE) TYPE  CHAR40
+*"----------------------------------------------------------------------
+types:
+  begin of ty_res,
+    delta_num_rec type i,
+  end of ty_res.
+Data:
+  l_conn      TYPE REF TO cl_sql_connection,
+  l_statement TYPE REF TO cl_sql_statement,
+  lx_sql       TYPE REF TO cx_sql_exception,
+  lt_res      TYPE REF TO data,
+  lt_res2     type table of ty_res,
+  l_tvarv_value type tvarvc-low,
+  l_period type i value 15,
+  l_max_num type i value 100,
+  l_delta_num_rec type i,
+  l_rec_num type i,
+  l_is_merged type i,
+  l_i type i.
+
+  l_conn = cl_sql_connection=>get_connection( ).
+  l_statement = l_conn->create_statement( ).
+
+  SELECT SINGLE low FROM tvarvc INTO l_tvarv_value
+    WHERE name = 'WAIT_DELTA_MERGE_PERIOD'.
+  l_period = l_tvarv_value.
+  SELECT SINGLE low FROM tvarvc INTO l_tvarv_value
+    WHERE name = 'WAIT_DELTA_MERGE_NUMBER'.
+  l_max_num = l_tvarv_value.
+  SELECT SINGLE low FROM tvarvc INTO l_tvarv_value
+    WHERE name = 'WAIT_DELTA_MERGE_REC_NUM'.
+  l_rec_num = l_tvarv_value.
+
+  DATA(lv_stmt) =
+    |select sum( raw_record_count_in_delta ) as delta_num_rec| &
+    |  from m_cs_tables| &
+    |  where table_name = '{ IN_TABLE }' |.
+
+  l_is_merged = 0.
+  l_i = 1.
+  while l_i <= l_max_num and l_is_merged = 0.
+    TRY.
+      clear: lt_res, lt_res2, l_delta_num_rec.
+      GET REFERENCE OF lt_res2 INTO lt_res.
+      DATA(l_res_ref) = l_statement->execute_query( lv_stmt ).
+      l_res_ref->set_param_table( lt_res ).
+      l_res_ref->next_package( ).
+      l_res_ref->close( ).
+      IF lt_res2 IS NOT INITIAL.
+        LOOP AT lt_res2 ASSIGNING FIELD-SYMBOL(<fs_res2>).
+          l_delta_num_rec = <fs_res2>-delta_num_rec.
+          if l_delta_num_rec < l_rec_num.
+            l_is_merged = 1.
+            exit.
+          endif.
+        ENDLOOP.
+      endif.
+    CATCH cx_sql_exception INTO lx_sql.
+      MESSAGE e020(zposwh).
+      WRITE: / 'Ошибка проверки завершения delta merge'.
+      WRITE: / lx_sql->sql_code.
+      WRITE: / lx_sql->sql_message.
+      WRITE: / lx_sql->get_text( ).
+    ENDTRY.
+
+    if l_is_merged = 0.
+      WAIT UP TO l_period SECONDS.
+    endif.
+    l_i = l_i + 1.
+  endwhile.
+ENDFUNCTION.

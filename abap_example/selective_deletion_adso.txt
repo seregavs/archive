@@ -1,0 +1,92 @@
+*&---------------------------------------------------------------------*
+*& Report ZDELADSO
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zdeladso.
+
+TYPE-POOLS: rsdrd, rsdq, rssg.
+PARAMETERS:
+  p_adso TYPE rsddatatarget.
+DATA:
+  gt_msg         TYPE rs_t_msg,
+  gsx_sel        TYPE rsdrd_sx_sel,
+  gthx_sel       TYPE rsdrd_thx_sel,
+  gt_branch_list TYPE TABLE OF /bic/oidbranch,
+  gv_month       TYPE /bi0/oicalmonth,
+  gv_date_pat    TYPE string,
+  gv_tabname     TYPE string.
+
+"—читываем параметры дл€ вборочного удалени€
+CALL FUNCTION 'Z_GET_CALC_PARAM'
+  IMPORTING
+    out_month       = gv_month
+    out_branch_list = gt_branch_list.
+
+IF sy-subrc <> 0.
+  MESSAGE e162(00) WITH Text-E01.
+  EXIT.
+ENDIF.
+
+CONCATENATE gv_month  '*' INTO gv_date_pat.
+
+"‘ильтр по мес€цу
+CLEAR gsx_sel.
+gsx_sel-iobjnm = 'REPORT_DATE'.
+gsx_sel-t_range = VALUE rsdrd_t_range( ( sign = 'I' option = 'CP' low = gv_date_pat keyfl = rs_c_true ) ).
+INSERT gsx_sel INTO TABLE gthx_sel.
+
+"‘ильтр по бранчам
+CLEAR gsx_sel.
+CONCATENATE '/BIC/A' p_adso '1' INTO gv_tabname. "получаем им€ таблицы неактивных данных
+
+TRY .
+*»щем пол€ BRANCH или BRANCH_ID в јƒ—ќ
+SELECT SINGLE fieldname
+  INTO gsx_sel-iobjnm
+FROM dd03l
+WHERE tabname = gv_tabname
+AND fieldname = 'BRANCH'.
+
+  IF sy-subrc <> 0.
+    SELECT SINGLE fieldname
+      INTO gsx_sel-iobjnm
+    FROM dd03l
+    WHERE tabname = gv_tabname
+    AND fieldname = 'BRANCH_ID'.
+
+    IF sy-subrc <> 0.
+      MESSAGE e162(00) WITH Text-E02.
+      EXIT.
+    ENDIF.
+  ENDIF.
+
+  gsx_sel-t_range = VALUE rsdrd_t_range( FOR iv_branch IN gt_branch_list ( sign = 'I' option = 'EQ' low = iv_branch keyfl = rs_c_true ) ).
+  INSERT gsx_sel INTO TABLE gthx_sel.
+
+  CALL FUNCTION 'RSDRD_SEL_DELETION'
+    EXPORTING
+      i_datatarget            = p_adso
+      i_thx_sel               = gthx_sel
+      i_authority_check       = 'X'
+      i_threshold             = '1.0000E-01'
+      i_mode                  = 'C'
+      i_no_logging            = ''
+      i_parallel_degree       = 1
+      i_no_commit             = ''
+      i_work_on_partitions    = ''
+      i_rebuild_bia           = ''
+      i_write_application_log = 'X'
+      i_propagate_deletion    = ''
+    CHANGING
+      c_t_msg                 = gt_msg.
+
+  IF sy-subrc = 0.
+    MESSAGE i162(00) WITH 'Status' 'Green'.
+  ELSE.
+    MESSAGE e162(00) WITH Text-E03.
+  ENDIF.
+
+CATCH CX_SY_OPEN_SQL_ERROR.
+  MESSAGE e162(00) WITH Text-E03.
+ENDTRY.
