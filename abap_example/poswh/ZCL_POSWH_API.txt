@@ -1,0 +1,2051 @@
+class ZCL_POSWH_API definition
+  public
+  final
+  create public .
+
+public section.
+
+
+  interfaces IF_AMDP_MARKER_HDB .
+
+  class-data LA_HDB_SCHEMA type CHAR20 .
+  class-data LA_EXD_SCHEMA type CHAR20 .
+  class-data LA_SAFETY_BIAS type CY_SPLIT value 0 ##NO_TEXT.
+
+  methods CONSTRUCTOR
+    importing
+      !HDB_SCHEMA type CHAR20 optional
+      !EXD_SCHEMA type CHAR20
+      !SAFETY_BIAS type RFCINT1 default 1 .
+  methods MAKE_POS_GROUP
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_CLEAR type CHAR1 .
+  methods INSERT_POS_GROUP
+    importing
+      !IN_EXDTABLE type CHAR20 optional
+      !IN_HDBTABLE type CHAR20
+      !IN_GROUPID type ZPOS_ID2 default '00'
+      !IN_LOW type ZPOS_RECPK37 optional
+      !IN_HIGH type ZPOS_RECPK37 optional .
+  methods FINISH_DELTA_LOADING
+    importing
+      !IN_HDBTABLE type CHAR20 .
+  methods EXEC_REMOTE_FLOW_RELEASE
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_RUNEXD type CHAR1
+      !IN_LOCK type CHAR1
+      !IN_DEACTFLOW type CHAR1 optional
+    returning
+      value(OUT_RES) type CHAR1 .
+  methods CHECK_CONSISTENCY
+    importing
+      !I_HDBTABLE type CHAR20
+      !I_BEGDA type DATS optional
+      !I_ENDDA type DATS optional
+    returning
+      value(O_RES) type DATS .
+  methods EXEC_REMOTE_FLOW_PREPARE
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_CLEAR type CHAR1
+      !IN_DEACTFLOW type CHAR1
+      !IN_LOCK type CHAR1 .
+  methods EXEC_REMOTE_FLOW
+    importing
+      !IN_HDBTABLE type CHAR20 .
+protected section.
+private section.
+
+  data LT_POS type ZPOS_POSPK_T .
+  data LA_GRPCNT type CY_SPLIT .
+  data LA_IGNOREWHERE type CHAR1 .
+
+  methods SET_DELTA_LABEL
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_REQTSN type ZPOS_REQTSN optional
+    returning
+      value(OT_RES) type ZPOS_ID2 .
+  methods GET_DELTA_LABEL
+    importing
+      !IN_HDBTABLE type CHAR20
+    returning
+      value(OT_REQTSN) type ZPOS_REQTSN .
+  methods GET_INSDELTA_STMT
+    importing
+      !IN_EXDTABLE type CHAR20 optional
+      !IN_HDBTABLE type CHAR20
+      !IN_WHERE type STRING
+      !IN_REQTSN type ZPOS_REQTSN
+    returning
+      value(OUT_STMT) type STRING .
+  methods GET_GRPDELTA_STMT
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_REQTSN type ZPOS_REQTSN
+    returning
+      value(OUT_STMT) type STRING .
+  methods GET_LOADTYPE
+    importing
+      !IN_HDBTABLE type CHAR20
+    returning
+      value(OUT_DELTATYPE) type CHAR1 .
+  methods GET_GRPFULL_STMT
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_WHERE type STRING
+    returning
+      value(OUT_STMT) type STRING .
+  methods GET_INSFULL_STMT
+    importing
+      !IN_EXDTABLE type CHAR20 optional
+      !IN_HDBTABLE type CHAR20
+      !IN_WHERE type STRING optional
+      !IN_WHERE_PK type STRING
+    returning
+      value(OUT_STMT) type STRING .
+  methods GET_WHERECOND_FULL
+    importing
+      !IN_HDBTABLE type CHAR20
+      !IN_WITHWHERE type CHAR1 default 'X'
+    returning
+      value(OUT_WHERE) type STRING .
+  methods EXEC_REMOTE_FLOW_LOCK
+    importing
+      !IN_HDBTABLE type CHAR20
+    returning
+      value(OUT_RES) type CHAR1 .
+  methods GET_MINMAX_CALDAY
+    importing
+      !I_EXDTABLE type CHAR20
+    exporting
+      !E_BEGDA type DATS
+      !E_ENDDA type DATS .
+  methods EXEC_REMOTE_TRUNCATE
+    importing
+      !IN_HDBTABLE type CHAR20
+    returning
+      value(OUT_RES) type CHAR1 .
+  methods GET_REMOTE_VIEW_NAME
+    importing
+      !I_HDBTABLE type CHAR20
+      !I_VT type CHAR5
+    returning
+      value(O_RES) type CHAR20 .
+  methods SET_REMOTE_FLOW_ACTIVE
+    importing
+      !IN_HDBTABLE type CHAR20
+    returning
+      value(OUT_RES) type CHAR1 .
+  methods SET_REMOTE_FLOW_INACTIVE
+    importing
+      !IN_HDBTABLE type CHAR20
+    returning
+      value(OUT_RES) type CHAR1 .
+
+  class-methods SET_REMOTE_PARAM
+    importing
+      value(i_table)       TYPE char20
+      value(i_table_type)   TYPE char20
+      value(i_enabled)     TYPE CHAR1
+      value(i_delta_mode)  TYPE CHAR1  default 'N'
+      value(i_period_from) TYPE CHAR10 default ''
+      value(i_period_to)   TYPE CHAR10 default ''.
+
+
+
+ENDCLASS.
+
+
+
+CLASS ZCL_POSWH_API IMPLEMENTATION.
+
+
+  METHOD check_consistency.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception,
+      lt_res       TYPE REF TO data,
+      lt_res2      TYPE zpos_rcptcompt.
+    " проверки корректности входных параметров
+    o_res = '99991231'.
+    CHECK i_hdbtable IS NOT INITIAL.
+
+    DATA(lv_hdbtable) = i_hdbtable.
+    DATA(lv_begda) = i_begda.
+    DATA(lv_endda) = i_endda.
+    DATA(lv_exdtable) = me->GET_REMOTE_VIEW_NAME(
+                  i_hdbtable = lv_hdbtable
+                  i_vt       = 'CHECK'
+              ).
+
+    IF ( lv_begda IS INITIAL ).
+      DATA: lv_p_exdtable TYPE char20.
+      lv_p_exdtable = lv_exdtable.
+      CALL METHOD me->get_minmax_calday
+        EXPORTING
+          i_exdtable = lv_p_exdtable
+        IMPORTING
+          e_begda    = lv_begda
+          e_endda    = lv_endda.
+      IF lv_begda IS INITIAL.
+*        MESSAGE e000(123) WITH | Ошибка определения дат для сравнения |.
+        MESSAGE e018(zposwh).
+        o_res = '99991231'.
+      ENDIF.
+    ELSE.
+      IF i_begda > i_endda.
+*        MESSAGE e000(123) WITH | Верхняя граница меньше нижней |.
+        MESSAGE e019(zposwh).
+        o_res = '99991231'.
+        EXIT.
+      ENDIF.
+    ENDIF.
+
+    CLEAR: o_res.
+    DATA(lv_stmt) =
+      |SELECT calday, SUM(cnt) as deltacnt | &
+      |  FROM ( | &
+      |SELECT 'H' as DB, calday, count(*) as cnt  | &
+      |  FROM "{ lv_hdbtable }" | &
+      |WHERE calday BETWEEN '{ lv_begda }' AND '{ lv_endda }'| &
+      | GROUP BY calday | &
+      | UNION ALL | &
+      |SELECT 'E' as DB, calday, -count(*) as cnt  | &
+      |  FROM "{ me->la_exd_schema }"."{ lv_exdtable }" | &
+      |WHERE calday BETWEEN '{ lv_begda }' AND '{ lv_endda }'| &
+      | GROUP BY calday  ) | &
+      |GROUP BY calday HAVING SUM(cnt) <> 0 ORDER BY 1 ASC|.
+    TRY.
+        GET REFERENCE OF lt_res2 INTO lt_res.
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+        l_res_ref->set_param_table( lt_res ).
+        l_res_ref->next_package( ).
+        l_res_ref->close( ).
+        IF lt_res2 IS NOT INITIAL.
+          MESSAGE e020(zposwh).
+          WRITE: / 'Ошибки выгрузки в orcl'.
+          LOOP AT lt_res2 ASSIGNING FIELD-SYMBOL(<fs_res2>).
+            o_res = <fs_res2>-calday.
+            WRITE: / |{ o_res } Разница в { <fs_res2>-deltacnt } записей |.
+          ENDLOOP.
+        ELSE.
+          MESSAGE i021(zposwh).
+          WRITE: / 'Нет ошибок выгрузки в orcl'.
+        ENDIF.
+      CATCH cx_sql_exception INTO lx_sql.
+        MESSAGE e020(zposwh).
+        WRITE: / 'Ошибка определения ошибки выгрузки в orcl'.
+        WRITE: / lx_sql->sql_code.
+        WRITE: / lx_sql->sql_message.
+        WRITE: / lx_sql->get_text( ).
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD CONSTRUCTOR.
+    me->la_exd_schema = exd_schema.
+    me->la_hdb_schema = hdb_schema.
+    me->la_safety_bias = safety_bias.
+    me->la_grpcnt = '05'.
+    me->la_ignorewhere = ''.
+
+  ENDMETHOD.
+
+
+  METHOD EXEC_REMOTE_FLOW.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    DATA:
+      lt_res  TYPE REF TO data,
+      lt_data TYPE zpos_pospk_t.
+
+    GET REFERENCE OF lt_data INTO lt_res.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_lockview) = me->GET_REMOTE_VIEW_NAME(
+                  i_hdbtable = lv_hdbtable
+                  i_vt       = 'RUN'
+              ).
+    DATA(lv_stmt) = | SELECT key as POSPK FROM "{ me->la_exd_schema }"."{ lv_lockview }" |.
+
+    TRY.
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+        l_res_ref->set_param_table( lt_res ).
+        l_res_ref->next_package( ).
+        l_res_ref->close( ).
+        WRITE: / | Обработка в orcl для { lv_hdbtable } запущена ОК |.
+        MESSAGE i028(zposwh) WITH lv_hdbtable.
+      CATCH cx_sql_exception INTO lx_sql.
+        WRITE: / | Обработка в orcl для { lv_hdbtable } запущена c ошибкой |.
+        WRITE: / lx_sql->sql_code.
+        WRITE: / lx_sql->sql_message.
+        MESSAGE e029(zposwh) WITH lv_hdbtable.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD EXEC_REMOTE_FLOW_LOCK.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    DATA:
+      lt_res  TYPE REF TO data,
+      lt_data TYPE zpos_pospk_t.
+
+    GET REFERENCE OF lt_data INTO lt_res.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+*    CASE lv_hdbtable.
+*      WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'
+*        OR '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+*        DATA(lv_lockview) = 'V_SET_LOCK_ITM'.
+*      WHEN '/BIC/APNTO0352'
+*        OR '/BIC/APNTO0353'.
+*        lv_lockview = 'V_SET_LOCK_HDR'.
+*      WHEN '/BIC/APOSDO022'
+*        OR '/BIC/APOSDO023'.
+*        lv_lockview = 'V_SET_LOCK_DIS'.
+*      WHEN OTHERS.
+*        out_res = ''.
+*        WRITE: / | Неизв.таблица для блокировки { lv_hdbtable }|.
+*        MESSAGE e000(123) WITH | Неизв.таблица для блокировки  { lv_hdbtable }|.
+*        RETURN.
+*    ENDCASE.
+
+    DATA(lv_lockview) = me->GET_REMOTE_VIEW_NAME(
+                  i_hdbtable = lv_hdbtable
+                  i_vt       = 'LOCK'
+              ).
+
+    DATA(lv_stmt) = | SELECT key as POSPK FROM "{ me->la_exd_schema }"."{ lv_lockview }" |.
+
+    TRY.
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+        l_res_ref->set_param_table( lt_res ).
+        l_res_ref->next_package( ).
+        l_res_ref->close( ).
+        out_res = 'X'.
+        WRITE: / | Блокировка на { lv_hdbtable }  установлена. Процесс продолжается |.
+*        MESSAGE i000(123) WITH | Блокировка на { lv_hdbtable } установлена. Процесс продолжается |.
+        MESSAGE i014(ZPOSWH) WITH lv_hdbtable.
+      CATCH cx_sql_exception INTO lx_sql.
+        out_res = ''.
+        WRITE: / | Блокировка на { lv_hdbtable } уже была установлена. Процесс прерван |.
+          WRITE: / lx_sql->sql_code.
+          WRITE: / lx_sql->sql_message.
+*        MESSAGE e000(123) WITH | Блокировка на { lv_hdbtable } уже была установлена. Процесс прерван |.
+        MESSAGE e015(ZPOSWH) WITH lv_hdbtable.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD EXEC_REMOTE_FLOW_PREPARE.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+* проверка возможности блокировки
+    IF in_lock = 'X'.
+      IF me->exec_remote_flow_lock( in_hdbtable = lv_hdbtable ) = ''.
+        RETURN.
+      ENDIF.
+    ENDIF.
+* деактивация и активация потоков в orcl
+    IF in_deactflow = 'X'.
+      IF me->SET_REMOTE_FLOW_ACTIVE( in_hdbtable = lv_hdbtable ) = ''.
+        RETURN.
+      ENDIF.
+    ENDIF.
+* очистка staging-таблиц
+    IF in_clear = 'X'.
+      IF me->exec_remote_truncate( in_hdbtable = lv_hdbtable ) = ''.
+        RETURN.
+      ENDIF.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD EXEC_REMOTE_FLOW_RELEASE.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    DATA:
+      lt_res  TYPE REF TO data,
+      lt_data TYPE zpos_pospk_t.
+
+    IF in_runexd = 'X'.
+      me->exec_remote_flow( in_hdbtable ).
+    ENDIF.
+
+    IF in_lock = 'X'.
+      GET REFERENCE OF lt_data INTO lt_res.
+
+      DATA(lv_hdbtable) = in_hdbtable.
+      DATA(lv_lockview) = me->GET_REMOTE_VIEW_NAME(
+                    i_hdbtable = lv_hdbtable
+                    i_vt       = 'REL'
+                ).
+      DATA(lv_stmt) = | SELECT key as POSPK FROM "{ me->la_exd_schema }"."{ lv_lockview }" |.
+
+      TRY.
+          lo_conn = cl_sql_connection=>get_connection( ).
+          lo_statement = lo_conn->create_statement( ).
+          DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+          l_res_ref->set_param_table( lt_res ).
+          l_res_ref->next_package( ).
+          l_res_ref->close( ).
+          out_res = 'X'.
+          WRITE: / | Блокировка на { lv_hdbtable }  снята. Процесс продолжается |.
+          MESSAGE i016(zposwh) WITH lv_hdbtable.
+        CATCH cx_sql_exception INTO lx_sql.
+          out_res = ''.
+          WRITE: / | Блокировка на { lv_hdbtable } не снята. Процесс прерван |.
+          WRITE: / lx_sql->sql_code.
+          WRITE: / lx_sql->sql_message.
+          MESSAGE e017(zposwh) WITH lv_hdbtable.
+      ENDTRY.
+    ENDIF.
+    IF in_deactflow = 'X'.
+      IF me->SET_REMOTE_FLOW_INACTIVE( in_hdbtable = lv_hdbtable ) = ''.
+        RETURN.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD EXEC_REMOTE_TRUNCATE.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    DATA:
+      lt_res  TYPE REF TO data,
+      lt_data TYPE zpos_pospk_t.
+
+    GET REFERENCE OF lt_data INTO lt_res.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_lockview) = me->GET_REMOTE_VIEW_NAME(
+                  i_hdbtable = lv_hdbtable
+                  i_vt       = 'CLEAR'
+              ).
+
+    DATA(lv_stmt) = | SELECT key as POSPK FROM "{ me->la_exd_schema }"."{ lv_lockview }" |.
+
+    TRY.
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+        l_res_ref->set_param_table( lt_res ).
+        l_res_ref->next_package( ).
+        l_res_ref->close( ).
+        out_res = 'X'.
+        WRITE: / | Удаление в staging для { lv_hdbtable } выполнено|.
+*        MESSAGE i000(123) WITH  | Удаление в staging для { lv_hdbtable } выполнено|.
+        MESSAGE i023(zposwh) WITH lv_hdbtable.
+      CATCH cx_sql_exception INTO lx_sql.
+        out_res = ''.
+        WRITE: /  | Удаление в staging для { lv_hdbtable } НЕ выполнено|.
+        WRITE: / lx_sql->sql_code.
+        WRITE: / lx_sql->sql_message.
+        MESSAGE e024(zposwh) WITH lv_hdbtable.
+*        MESSAGE e000(123) WITH  | Удаление в staging для { lv_hdbtable } НЕ выполнено|.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD FINISH_DELTA_LOADING.
+    " все успешно, теперь и последнюю дельту можно сохранить в таблицу до следующего раза
+    DATA:
+      lv_res2   TYPE zpos_id2.
+
+    CALL METHOD me->set_delta_label
+      EXPORTING
+        in_hdbtable = in_hdbtable
+      RECEIVING
+        ot_res      = lv_res2.
+  ENDMETHOD.
+
+
+  METHOD GET_DELTA_LABEL.
+    SELECT SINGLE reqtsn INTO ot_reqtsn
+      FROM ZPOSWH_DELTA_TSN
+      WHERE hdb_table = in_hdbtable.
+    IF sy-subrc NE 0.
+      ot_reqtsn = '00000000000000000000000'.  "23
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD GET_GRPDELTA_STMT.
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_reqtsn) = in_reqtsn.
+
+    CASE lv_hdbtable.
+      WHEN '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193'.
+        DATA(lv_stmt) =
+            | SELECT pk as pospk |
+            && |  FROM ( |
+            && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+            && |     FROM ( |
+            && | SELECT pk |
+            && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+            && |      FROM ( |
+            && | SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_',concat(t0."CALDAY", concat('_', concat(t0."/BIC/CRECNUM", concat('_',t0."/BIC/RECITMID")))))))))) as pk |
+            && | FROM "{ lv_hdbtable }" t0,  |
+            && | 	(SELECT "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "/BIC/RECITMID", "CALDAY", |
+            && |        MAX(REQTSN) as REQTSN, count(*) as cnt  |
+            && | 	   FROM "{ lv_hdbtable }" |
+            && | 	  WHERE REQTSN > '{ lv_reqtsn }' |
+            && | 	  GROUP BY "RC_RT_FDY","PLANT","/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "/BIC/RECITMID", "CALDAY") t1 |
+            && | WHERE t0.recordmode <> 'X' AND t0."RC_RT_FDY"   = t1."RC_RT_FDY"     AND t0."PLANT"   = t1."PLANT" |
+            && |   AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"   AND t0."DOC_NUM" = t1."DOC_NUM" |
+            && |   AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM" AND t0."/BIC/RECITMID" = t1."/BIC/RECITMID" |
+            && |   AND t0."CALDAY" = t1."CALDAY" AND t0.reqtsn = t1.reqtsn ))) |
+            && |   WHERE nt <> nt_1	  |
+            && |   ORDER BY 1 |.
+      WHEN '/BIC/APNTO0353'.
+        lv_stmt =
+        | SELECT pk as pospk |
+        && |  FROM ( |
+        && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+        && |     FROM ( |
+        && | SELECT pk |
+        && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+        && |      FROM ( |
+        && | SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_', concat(t0."CALDAY", concat('_',t0."/BIC/CRECNUM")))))))) as pk |
+        && | FROM "{ lv_hdbtable }" t0,  |
+        && | 	(SELECT "PLANT", "/BIC/ZPOSNO", "CALDAY", "DOC_NUM", "/BIC/CRECNUM",|
+        && |        MAX(REQTSN) as REQTSN, count(*) as cnt  |
+        && | 	   FROM "{ lv_hdbtable }" |
+        && | 	  WHERE REQTSN > '{ lv_reqtsn }' |
+        && | 	  GROUP BY "PLANT","/BIC/ZPOSNO", "DOC_NUM", "CALDAY", "/BIC/CRECNUM") t1 |
+        && | WHERE t0.recordmode <> 'X' AND t0."PLANT"   = t1."PLANT" |
+        && |   AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"   AND t0."DOC_NUM" = t1."DOC_NUM" |
+        && |   AND t0."CALDAY" = t1."CALDAY" AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM" |
+        && |   AND t0.reqtsn = t1.reqtsn ))) |
+        && |   WHERE nt <> nt_1	  |
+        && |   ORDER BY 1 |.
+      WHEN '/BIC/APOSDO023' OR '/BIC/APOSDO033' OR '/BIC/APOSDO01C3'.
+        lv_stmt =
+            | SELECT pk as pospk |
+            && |  FROM ( |
+            && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+            && |     FROM ( |
+            && | SELECT pk |
+            && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+            && |      FROM ( |
+            && | SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", |
+            && |   concat(t0."RC_RT_FDY",concat(t0."CALDAY", concat(t0."/BIC/DISCID", concat(t0."/BIC/CRECNUM", concat(t0."/BIC/DISCONTYP",t0."/BIC/RECITMID")))))))))) as pk |
+            && | FROM "{ lv_hdbtable }" t0,  |
+            && | 	(SELECT "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "CALDAY", "/BIC/DISCID", "/BIC/DISCONTYP", "/BIC/RECITMID", |
+            && |        MAX(REQTSN) as REQTSN, count(*) as cnt  |
+            && | 	   FROM "{ lv_hdbtable }" |
+            && | 	  WHERE REQTSN > '{ lv_reqtsn }' |
+            && | 	  GROUP BY "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "CALDAY", "/BIC/DISCID", "/BIC/DISCONTYP", "/BIC/RECITMID") t1 |
+            && | WHERE t0.recordmode <> 'X' AND t0."RC_RT_FDY"   = t1."RC_RT_FDY"         AND t0."PLANT"   = t1."PLANT" |
+            && |                            AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"       AND t0."DOC_NUM" = t1."DOC_NUM" |
+            && |                            AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM"     AND t0."CALDAY" = t1."CALDAY" |
+            && |                            AND t0."/BIC/RECITMID" = t1."/BIC/RECITMID" |
+            && |                            AND t0."/BIC/DISCONTYP" = t1."/BIC/DISCONTYP" AND t0."/BIC/DISCID" = t1."/BIC/DISCID" |
+            && |                            AND t0.reqtsn = t1.reqtsn ))) |
+            && |   WHERE nt <> nt_1	  |
+            && |   ORDER BY 1 |.
+    ENDCASE.
+    out_stmt = lv_stmt.
+  ENDMETHOD.
+
+
+  METHOD GET_GRPFULL_STMT.
+    DATA(lv_hdbtable) = in_hdbtable.
+    " in_where Должно включать в себя WHERE
+    CASE lv_hdbtable.
+      WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'.
+        DATA(lv_stmt) =
+            | SELECT pk as pospk |
+            && |  FROM ( |
+            && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+            && |     FROM ( |
+            && | SELECT pk |
+            && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+            && |      FROM ( |
+            && | SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_',concat(t0."CALDAY", concat('_', concat(t0."/BIC/CRECNUM", concat('_',t0."/BIC/RECITMID")))))))))) as pk |
+*            && | FROM "{ me->la_hdb_schema }"."{ lv_hdbtable }" t0 { in_where } )))|
+            && | FROM "{ lv_hdbtable }" t0 { in_where } )))|
+            && |   WHERE nt <> nt_1	  |
+            && |   ORDER BY 1 |.
+      WHEN '/BIC/APNTO0352'.
+        lv_stmt =
+            | SELECT pk as pospk |
+            && |  FROM ( |
+            && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+            && |     FROM ( |
+            && | SELECT pk |
+            && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+            && |      FROM ( |
+            && | SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_', concat(t0."CALDAY", concat('_',t0."/BIC/CRECNUM")))))))) as pk |
+            && | FROM "{ lv_hdbtable }" t0 { in_where } )))|
+            && |   WHERE nt <> nt_1	  |
+            && |   ORDER BY 1 |.
+      WHEN '/BIC/APOSDO022' OR '/BIC/APOSDO032' OR '/BIC/APOSDO01C2'. " скидки
+        lv_stmt =
+            | SELECT pk as pospk |
+            && |  FROM ( |
+            && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+            && |     FROM ( |
+            && | SELECT pk |
+            && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+            && |      FROM ( |
+            && | SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", |
+            && |   concat("RC_RT_FDY",concat(t0."CALDAY", concat("/BIC/DISCID", concat(t0."/BIC/CRECNUM", concat(t0."/BIC/DISCONTYP",t0."/BIC/RECITMID")))))))))) as pk |
+            && | FROM "{ lv_hdbtable }" t0 { in_where } )))|
+            && |   WHERE nt <> nt_1	  |
+            && |   ORDER BY 1 |.
+*      WHEN '/BIC/APOSDO0100'.  " скидки 2014.Q1 - 2016.Q1
+*        lv_stmt =
+*            | SELECT pk as pospk |
+*            && |  FROM ( |
+*            && | SELECT pk, nt, IFNULL(LAG(nt) OVER (ORDER BY pk),'0') as nt_1 |
+*            && |     FROM ( |
+*            && | SELECT pk |
+*            && |       ,NTILE({ me->la_grpcnt }) OVER (ORDER BY pk) as nt |
+*            && |      FROM ( |
+*            && | SELECT concat(t0."REQUEST", concat('_',concat(t0."DATAPAKID", concat('_', t0."RECORD")))) as pk |
+**            && |   concat("RC_RT_FDY",concat(t0."CALDAY", concat("/BIC/DISCID", concat(t0."/BIC/CRECNUM", concat(t0."/BIC/DISCONTYP",t0."/BIC/RECITMID")))))))))) as pk |
+*            && | FROM "{ lv_hdbtable }" t0 { in_where } )))|
+*            && |   WHERE nt <> nt_1    |
+*            && |   ORDER BY 1 |.
+    ENDCASE.
+    out_stmt = lv_stmt.
+  ENDMETHOD.
+
+
+  METHOD GET_INSDELTA_STMT.
+*    DATA(lv_exdtable) = in_exdtable.
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_reqtsn) = in_reqtsn.
+
+    CASE lv_hdbtable.
+      WHEN '/BIC/APOSRO163'.
+        DATA(lv_stmt) = | INSERT INTO "{ me->la_exd_schema }"."POS_REC_ITM_DELTA" |
+              && |  ("RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE"  ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1" ) |
+              && |(SELECT |
+              && |   "RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE"  ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1"|
+              && | FROM (|
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_',concat(t0."CALDAY", concat('_', concat(t0."/BIC/CRECNUM", concat('_',t0."/BIC/RECITMID")))))))))) as pk|
+              && |      , t0.*                |
+              && |  FROM "{ lv_hdbtable }" t0, |
+              && |  (SELECT "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "/BIC/RECITMID", "CALDAY", |
+              && |        MAX(REQTSN) as REQTSN, count(*) as cnt |
+              && |     FROM "{ lv_hdbtable }" |
+              && |    WHERE REQTSN > '{ lv_reqtsn }'  |
+              && |    GROUP BY "RC_RT_FDY","PLANT","/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "/BIC/RECITMID", "CALDAY") t1 |
+              && | WHERE t0.recordmode <> 'X' AND t0."RC_RT_FDY"   = t1."RC_RT_FDY"     AND t0."PLANT"   = t1."PLANT" |
+              && |  AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"   AND t0."DOC_NUM" = t1."DOC_NUM" |
+              && |  AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM" AND t0."/BIC/RECITMID" = t1."/BIC/RECITMID" |
+              && |  AND t0."CALDAY" = t1."CALDAY" AND t0.reqtsn = t1.reqtsn ) WHERE recordmode <> 'X' AND |
+              && |  { in_where } )|.
+      WHEN  '/BIC/APOSRO173' OR '/BIC/APOSRO183'.
+       lv_stmt = | INSERT INTO "{ me->la_exd_schema }"."POS_REC_ITM_DELTA" |
+              && |  ("RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE"  ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "DEBITOR",|
+              && |   "REF_DOC_NO",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1" ) |
+              && |(SELECT |
+              && |   "RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE"  ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "DEBITOR",|
+              && |   "REF_DOC_NO",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1"|
+              && | FROM (|
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_',concat(t0."CALDAY", concat('_', concat(t0."/BIC/CRECNUM", concat('_',t0."/BIC/RECITMID")))))))))) as pk|
+              && |      , t0.*                |
+              && |  FROM "{ lv_hdbtable }" t0, |
+              && |  (SELECT "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "/BIC/RECITMID", "CALDAY", |
+              && |        MAX(REQTSN) as REQTSN, count(*) as cnt |
+              && |     FROM "{ lv_hdbtable }" |
+              && |    WHERE REQTSN > '{ lv_reqtsn }'  |
+              && |    GROUP BY "RC_RT_FDY","PLANT","/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "/BIC/RECITMID", "CALDAY") t1 |
+              && | WHERE t0.recordmode <> 'X' AND t0."RC_RT_FDY"   = t1."RC_RT_FDY"     AND t0."PLANT"   = t1."PLANT" |
+              && |  AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"   AND t0."DOC_NUM" = t1."DOC_NUM" |
+              && |  AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM" AND t0."/BIC/RECITMID" = t1."/BIC/RECITMID" |
+              && |  AND t0."CALDAY" = t1."CALDAY" AND t0.reqtsn = t1.reqtsn ) WHERE recordmode <> 'X' AND |
+              && |  { in_where } )|.
+      WHEN '/BIC/APNTO0353'.
+        lv_stmt = | INSERT INTO "{ me->la_exd_schema }"."POS_REC_HDR_DELTA" |
+              && |  ("RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RTSAEXCUST", |
+              && |   "/BIC/ZRTSAPRMT", |
+              && |   "/BIC/ZRTSAB2BT", |
+              && |   "RTSAEXCUSV", |
+              && |   "/BIC/ZRTSAPRMV" , |
+              && |   "/BIC/ZRTSAB2BV", |
+              && |   "/BIC/ZALTCSPRM", |
+              && |   "/BIC/ZALTCSB2B", |
+              && |   "/BIC/ZALTCBPRM", |
+              && |   "/BIC/ZALTCBB2B", |
+              && |   "DEBITOR", |
+              && |   "REF_DOC_NO", |
+              && |   "RT_PAYDIR",|
+              && |   "LOC_CURRCY",|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR") |
+              && |(SELECT |
+              && |   "RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RTSAEXCUST", |
+              && |   "/BIC/ZRTSAPRMT", |
+              && |   "/BIC/ZRTSAB2BT", |
+              && |   "RTSAEXCUSV", |
+              && |   "/BIC/ZRTSAPRMV" , |
+              && |   "/BIC/ZRTSAB2BV", |
+              && |   "/BIC/ZALTCSPRM", |
+              && |   "/BIC/ZALTCSB2B", |
+              && |   "/BIC/ZALTCBPRM", |
+              && |   "/BIC/ZALTCBB2B", |
+              && |   "DEBITOR", |
+              && |   "REF_DOC_NO", |
+              && |   "RT_PAYDIR",|
+              && |   "LOC_CURRCY",|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR" |
+              && | FROM ( |
+**              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_', concat(t0.rc_rt_fdy,concat('_',t0."/BIC/CRECNUM")))))))) as pk|
+**              && |      , t0.* |
+**              && |  FROM "{ me->la_hdb_schema }"."{ lv_hdbtable }" t0 )|
+**              && |  WHERE { in_where_pk } AND { in_where } ) |.
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_', concat(t0."CALDAY", concat('_',t0."/BIC/CRECNUM")))))))) as pk|
+              && |      , t0.*                |
+              && |  FROM "{ lv_hdbtable }" t0, |
+              && |  (SELECT "PLANT", "/BIC/ZPOSNO", "CALDAY", "DOC_NUM", "/BIC/CRECNUM",|
+              && |        MAX(REQTSN) as REQTSN, count(*) as cnt |
+              && |     FROM "{ lv_hdbtable }" |
+              && |    WHERE REQTSN > '{ lv_reqtsn }'  |
+              && |    GROUP BY "CALDAY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM") t1 |
+              && | WHERE t0.recordmode <> 'X' AND t0."CALDAY"   = t1."CALDAY"    AND t0."PLANT"   = t1."PLANT" |
+              && |  AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"   AND t0."DOC_NUM" = t1."DOC_NUM" |
+              && |  AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM"  |
+              && |  AND t0.reqtsn = t1.reqtsn ) WHERE recordmode <> 'X' AND |
+              && |  { in_where } )|.
+      WHEN '/BIC/APOSDO023' OR '/BIC/APOSDO033' OR '/BIC/APOSDO01C3'..
+        lv_stmt = |   INSERT INTO "{ me->la_exd_schema }"."POS_DIS_ITM_DELTA"   (  "CALDAY" , |
+              && |   	"PLANT" , |
+              && |   	"/BIC/DISCONTYP" , |
+              && |   	"/BIC/ZPOSNO" , |
+              && |   	"DOC_NUM" , |
+              && |   	"/BIC/CRECNUM" , |
+              && |   	"RC_RT_FDY", |
+              && |   	"/BIC/RECITMID" , |
+              && |   	"/BIC/DISCID" , |
+              && |   	"RECORDMODE", |
+              && |   	"/BIC/CLIENT" , |
+              && |   	"/BIC/CARDKIND" ,|
+              && |   	"/BIC/CARD12" , |
+              && |   	"MATERIAL" , |
+              && |   	"RT_PROMO" , |
+              && |   	"/BIC/ZPRMATGRP", |
+              && |   	"LOC_CURRCY" , |
+              && |   	"SALES_UNIT" , |
+              && |   	"RTSAEXCUST", |
+              && |   	"/BIC/ZRT_PREDR" , |
+              && |   	"/BIC/DISCOUNT1", |
+              && |   	"/BIC/PRICESTB" , |
+              && |   	"CPSAEXCUSU" ) |
+              && | (SELECT "CALDAY" ,|
+              && |   	"PLANT" , |
+              && |   	"/BIC/DISCONTYP" , |
+              && |   	"/BIC/ZPOSNO" , |
+              && |   	"DOC_NUM" , |
+              && |   	"/BIC/CRECNUM" , |
+              && |   	"RC_RT_FDY", |
+              && |   	"/BIC/RECITMID" , |
+              && |   	"/BIC/DISCID" , |
+              && |   	"RECORDMODE", |
+              && |   	"/BIC/CLIENT" , |
+              && |   	"/BIC/CARDKIND" ,|
+              && |   	"/BIC/CARD12" , |
+              && |   	"MATERIAL" , |
+              && |   	"RT_PROMO" , |
+              && |   	"/BIC/ZPRMATGRP", |
+              && |   	"LOC_CURRCY" , |
+              && |   	"SALES_UNIT" , |
+              && |   	"RTSAEXCUST", |
+              && |   	"/BIC/ZRT_PREDR" , |
+              && |   	"/BIC/DISCOUNT1", |
+              && |   	"/BIC/PRICESTB" , |
+              && |   	"CPSAEXCUSU"  |
+              && | FROM ( |
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO",|
+              && |   concat(t0."RC_RT_FDY",concat(t0."CALDAY", concat(t0."/BIC/DISCID", concat(t0."/BIC/CRECNUM", concat(t0."/BIC/DISCONTYP",t0."/BIC/RECITMID")))))))))) as pk|
+              && |      , t0.*                |
+              && |  FROM "{ lv_hdbtable }" t0, |
+              && |  (SELECT "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "CALDAY", "/BIC/DISCID", "/BIC/DISCONTYP", "/BIC/RECITMID", |
+              && |        MAX(REQTSN) as REQTSN, count(*) as cnt |
+              && |     FROM "{ lv_hdbtable }" |
+              && |    WHERE REQTSN > '{ lv_reqtsn }'  |
+              && |    GROUP BY "RC_RT_FDY", "PLANT", "/BIC/ZPOSNO", "DOC_NUM", "/BIC/CRECNUM", "CALDAY", "/BIC/DISCID", "/BIC/DISCONTYP", "/BIC/RECITMID") t1 |
+              && | WHERE t0.recordmode <> 'X' AND t0."RC_RT_FDY"   = t1."RC_RT_FDY"     AND t0."PLANT"   = t1."PLANT" |
+              && |                            AND t0."/BIC/ZPOSNO" = t1."/BIC/ZPOSNO"   AND t0."DOC_NUM" = t1."DOC_NUM" |
+              && |                            AND t0."/BIC/CRECNUM" = t1."/BIC/CRECNUM" AND t0."CALDAY" = t1."CALDAY" |
+              && |                            AND t0."/BIC/RECITMID" = t1."/BIC/RECITMID" |
+              && |                            AND t0."/BIC/DISCONTYP" = t1."/BIC/DISCONTYP" AND t0."/BIC/DISCID" = t1."/BIC/DISCID" |
+              && |                            AND t0.reqtsn = t1.reqtsn ) WHERE recordmode <> 'X' AND |
+              && |  { in_where } )|.
+      WHEN OTHERS.
+        lv_stmt = ''.
+    ENDCASE.
+    out_stmt = lv_stmt.
+  ENDMETHOD.
+
+
+  METHOD GET_INSFULL_STMT.
+*    DATA(lv_exdtable) = in_exdtable.
+    DATA(lv_hdbtable) = in_hdbtable.
+
+    CASE lv_hdbtable.
+      WHEN '/BIC/APOSRO162'.
+        DATA(lv_stmt) = | INSERT INTO "{ me->la_exd_schema }"."POS_REC_ITM_RELOAD" |
+              && |  ("RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1" ) |
+              && |(SELECT |
+              && |   "RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1"|
+              && | FROM ( |
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_',concat(t0."CALDAY", concat('_', concat(t0."/BIC/CRECNUM", concat('_',t0."/BIC/RECITMID")))))))))) as pk|
+              && |      , t0.* |
+              && |  FROM "{ lv_hdbtable }" t0 )|
+              && |  WHERE { in_where_pk } AND { in_where } ) |.
+      WHEN '/BIC/APOSRO172' OR '/BIC/APOSRO182'.
+       lv_stmt = | INSERT INTO "{ me->la_exd_schema }"."POS_REC_ITM_RELOAD" |
+              && |  ("RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "DEBITOR",|
+              && |   "REF_DOC_NO",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1" ) |
+              && |(SELECT |
+              && |   "RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "/BIC/RECITMID" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "DEBITOR",|
+              && |   "REF_DOC_NO",|
+              && |   "ERRORFLAG",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RT_PAYDIR",|
+              && |   "/BIC/ZSALETYPE",|
+              && |   "MATERIAL",|
+              && |   "/BIC/ZEANUPC",|
+              && |   "RT_PROMO",|
+              && |   "/BIC/ZFLAGB2B",|
+              && |   "LOC_CURRCY",|
+              && |   "BASE_UOM",|
+              && |   "SALES_UNIT",|
+              && |   "CPSAEXCUBU" ,|
+              && |   "CPSAEXCUSU",|
+              && |   "CPSAEXCUPV",|
+              && |   "RTSAEXCUST",|
+              && |   "RTSAEXCUSV",|
+              && |   "/BIC/ZRT_PREDR" ,|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR", |
+              && |   "/BIC/COUNTER1"|
+              && | FROM ( |
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_',concat(t0."CALDAY", concat('_', concat(t0."/BIC/CRECNUM", concat('_',t0."/BIC/RECITMID")))))))))) as pk|
+              && |      , t0.* |
+              && |  FROM "{ lv_hdbtable }" t0 )|
+              && |  WHERE { in_where_pk } AND { in_where } ) |.
+
+      WHEN '/BIC/APNTO0352'.
+*        lv_stmt = | INSERT INTO "{ me->la_exd_schema }"."{ lv_exdtable }" |
+        lv_stmt = | INSERT INTO "{ me->la_exd_schema }"."POS_REC_HDR_RELOAD" |
+              && |  ("RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RTSAEXCUST", |
+              && |   "/BIC/ZRTSAPRMT", |
+              && |   "/BIC/ZRTSAB2BT", |
+              && |   "RTSAEXCUSV", |
+              && |   "/BIC/ZRTSAPRMV" , |
+              && |   "/BIC/ZRTSAB2BV", |
+              && |   "/BIC/ZALTCSPRM", |
+              && |   "/BIC/ZALTCSB2B", |
+              && |   "/BIC/ZALTCBPRM", |
+              && |   "/BIC/ZALTCBB2B", |
+              && |   "DEBITOR", |
+              && |   "REF_DOC_NO", |
+              && |   "RT_PAYDIR",|
+              && |   "LOC_CURRCY",|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR") |
+              && |(SELECT |
+              && |   "RC_RT_FDY" , |
+              && |   "PLANT" , |
+              && |   "/BIC/ZPOSNO", |
+              && |   "DOC_NUM" , |
+              && |   "/BIC/CRECNUM" ,|
+              && |   "RECORDMODE" ,|
+              && |   "CALDAY"  ,|
+              && |   "TIME" ,|
+              && |   "/BIC/CARD12",|
+              && |   "/BIC/CARDKIND",|
+              && |   "/BIC/CLIENT",|
+              && |   "/BIC/CASHIER",|
+              && |   "/BIC/ZFLAGPRO",|
+              && |   "RTSAEXCUST", |
+              && |   "/BIC/ZRTSAPRMT", |
+              && |   "/BIC/ZRTSAB2BT", |
+              && |   "RTSAEXCUSV", |
+              && |   "/BIC/ZRTSAPRMV" , |
+              && |   "/BIC/ZRTSAB2BV", |
+              && |   "/BIC/ZALTCSPRM", |
+              && |   "/BIC/ZALTCSB2B", |
+              && |   "/BIC/ZALTCBPRM", |
+              && |   "/BIC/ZALTCBB2B", |
+              && |   "DEBITOR", |
+              && |   "REF_DOC_NO", |
+              && |   "RT_PAYDIR",|
+              && |   "LOC_CURRCY",|
+              && |   "/BIC/ZALTCOST",|
+              && |   "/BIC/ZALTCSTBN",|
+              && |   "RT_NORECRE",|
+              && |   "RT_NOREPOS",|
+              && |   "RT_NOSCANM",|
+              && |   "RT_NOARTRE",|
+              && |   "RT_NOPOSIR" |
+              && | FROM ( |
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO", concat('_', concat(t0."CALDAY", concat('_',t0."/BIC/CRECNUM")))))))) as pk|
+              && |      , t0.* |
+              && |  FROM "{ lv_hdbtable }" t0 )|
+              && |  WHERE { in_where_pk } AND { in_where } ) |.
+      WHEN '/BIC/APOSDO022' OR '/BIC/APOSDO032' OR '/BIC/APOSDO01C2'.
+        lv_stmt = |   INSERT INTO "{ me->la_exd_schema }"."POS_DIS_ITM_RELOAD" |
+              && |   ("CALDAY"  ,|
+              && |   	"PLANT" , |
+              && |   	"/BIC/DISCONTYP" , |
+              && |   	"/BIC/ZPOSNO" , |
+              && |   	"DOC_NUM" , |
+              && |   	"/BIC/CRECNUM" , |
+              && |   	"RC_RT_FDY", |
+              && |   	"/BIC/RECITMID" , |
+              && |   	"/BIC/DISCID" , |
+              && |   	"RECORDMODE", |
+              && |   	"/BIC/CLIENT" , |
+              && |   	"/BIC/CARDKIND" ,|
+              && |   	"/BIC/CARD12" , |
+              && |   	"MATERIAL" , |
+              && |   	"RT_PROMO" , |
+              && |   	"/BIC/ZPRMATGRP", |
+              && |   	"LOC_CURRCY" , |
+              && |   	"SALES_UNIT" , |
+              && |   	"RTSAEXCUST", |
+              && |   	"/BIC/ZRT_PREDR" , |
+              && |   	"/BIC/DISCOUNT1", |
+              && |   	"/BIC/PRICESTB" , |
+              && |   	"CPSAEXCUSU" ) |
+              && | (SELECT |
+              && |   	"CALDAY" , |
+              && |   	"PLANT" , |
+              && |   	"/BIC/DISCONTYP" , |
+              && |   	"/BIC/ZPOSNO" , |
+              && |   	"DOC_NUM" , |
+              && |   	"/BIC/CRECNUM" , |
+              && |   	"RC_RT_FDY", |
+              && |   	"/BIC/RECITMID" , |
+              && |   	"/BIC/DISCID" , |
+              && |   	"RECORDMODE", |
+              && |   	"/BIC/CLIENT" , |
+              && |   	"/BIC/CARDKIND" ,|
+              && |   	"/BIC/CARD12" , |
+              && |   	"MATERIAL" , |
+              && |   	"RT_PROMO" , |
+              && |   	"/BIC/ZPRMATGRP", |
+              && |   	"LOC_CURRCY" , |
+              && |   	"SALES_UNIT" , |
+              && |   	"RTSAEXCUST", |
+              && |   	"/BIC/ZRT_PREDR" , |
+              && |   	"/BIC/DISCOUNT1", |
+              && |   	"/BIC/PRICESTB" , |
+              && |   	"CPSAEXCUSU"  |
+              && | FROM ( |
+              && |  SELECT concat(t0."PLANT", concat('_',concat(t0."DOC_NUM", concat('_', concat(t0."/BIC/ZPOSNO",|
+              && |   concat("RC_RT_FDY",concat(t0."CALDAY", concat("/BIC/DISCID", concat(t0."/BIC/CRECNUM", concat(t0."/BIC/DISCONTYP",t0."/BIC/RECITMID")))))))))) as pk |
+              && |      , t0.* |
+              && |  FROM "{ lv_hdbtable }" t0 )|
+              && |  WHERE { in_where_pk } AND { in_where } ) |.
+*      WHEN '/BIC/APOSDO0100'. " скидки 01.01.2014 - 31.03.2016
+*        lv_stmt = |   INSERT INTO "{ me->la_exd_schema }"."POS_DIS_ITM_RELOAD" |
+*              && |   ("CALDAY"  ,|
+*              && |     "PLANT" , |
+*              && |     "/BIC/DISCONTYP" , |
+*              && |     "/BIC/ZPOSNO" , |
+*              && |     "DOC_NUM" , |
+*              && |     "/BIC/CRECNUM" , |
+*              && |     "RC_RT_FDY", |
+*              && |     "/BIC/RECITMID" , |
+*              && |     "/BIC/DISCID" , |
+*              && |     "RECORDMODE", |
+*              && |     "/BIC/RCPTID" ,|
+*              && |     "/BIC/CLIENT" , |
+*              && |     "/BIC/CARDKIND" ,|
+*              && |     "/BIC/CARD12" , |
+*              && |     "MATERIAL" , |
+*              && |     "RT_PROMO" , |
+*              && |     "/BIC/ZPRMATGRP", |
+*              && |     "LOC_CURRCY" , |
+*              && |     "SALES_UNIT" , |
+*              && |     "RTSAEXCUST", |
+*              && |     "/BIC/ZRT_PREDR" , |
+*              && |     "/BIC/DISCOUNT1", |
+*              && |     "/BIC/PRICESTB" , |
+*              && |     "CPSAEXCUSU" ) |
+*              && | (SELECT |
+*              && |     "CALDAY" , | "*
+*              && |     "PLANT" , |
+*              && |     "/BIC/DISCONTYP" , |
+*              && |     "/BIC/ZPOSNO" , |
+*              && |     "DOC_NUM" , | "*
+*              && |     "/BIC/CRECNUM" , |
+*              && |     "RC_RT_FDY", |
+*              && |     "/BIC/RECITMID" , |
+*              && |     "/BIC/DISCID" , |
+*              && |     "RECORDMODE", | "*
+*              && |     "/BIC/RCPTID" ,| "*
+*              && |     "/BIC/CLIENT" , |
+*              && |     "/BIC/CARDKIND" ,|
+*              && |     "/BIC/CARD12" , |
+*              && |     "MATERIAL" , |
+*              && |     "RT_PROMO" , |
+*              && |     "/BIC/ZPRMATGRP", |
+*              && |     "LOC_CURRCY" , |
+*              && |     "SALES_UNIT" , |
+*              && |     "RTSAEXCUST", |
+*              && |     "/BIC/ZRT_PREDR" , | "*
+*              && |     "/BIC/DISCOUNT1", |
+*              && |     "/BIC/PRICESTB" , |
+*              && |     "CPSAEXCUSU"  | "*
+*              && | FROM ( |
+*              && |  SELECT concat(t0."REQUEST", concat('_',concat(t0."DATAPAKID", "RECORD"))) as pk |
+**              && |   concat("RC_RT_FDY",concat(t0."CALDAY", concat("/BIC/DISCID", concat(t0."/BIC/CRECNUM", concat(t0."/BIC/DISCONTYP",t0."/BIC/RECITMID")))))))))) as pk |
+*              && |      , t0.* |
+*              && |  FROM "{ lv_hdbtable }" t0 )|
+*              && |  WHERE { in_where_pk } AND { in_where } ) |.
+      WHEN OTHERS.
+        lv_stmt = ''.
+    ENDCASE.
+    out_stmt = lv_stmt.
+  ENDMETHOD.
+
+
+  METHOD GET_LOADTYPE.
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_i) = strlen( lv_hdbtable ) - 1.
+    SHIFT lv_hdbtable LEFT BY lv_i PLACES.
+    out_deltatype = lv_hdbtable+0(1).
+    CASE out_deltatype.
+      WHEN '2'. out_deltatype = 'F'. " Full upload
+      WHEN '3'. out_deltatype = 'D'. " Delta upload
+      WHEN OTHERS. out_deltatype = 'X'.
+    ENDCASE.
+
+  ENDMETHOD.
+
+
+  METHOD get_minmax_calday.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception,
+      lt_res       TYPE REF TO data,
+      lt_res2      TYPE zpos_datlimitt.
+
+    DATA(lv_exdtable) = i_exdtable.
+    DATA(lv_stmt) =
+      |SELECT min(calday) as begda | &
+      |      ,max(calday) as endda | &
+      |  FROM "{ me->la_exd_schema }"."{ lv_exdtable }" |.
+    TRY.
+        GET REFERENCE OF lt_res2 INTO lt_res.
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+        l_res_ref->set_param_table( lt_res ).
+        l_res_ref->next_package( ).
+        l_res_ref->close( ).
+        IF lt_res2 IS NOT INITIAL.
+          LOOP AT lt_res2 ASSIGNING FIELD-SYMBOL(<fs_res2>).
+            e_begda = <fs_res2>-begda.
+            e_endda = <fs_res2>-endda.
+            IF e_begda = '00000000'.
+              e_begda = '20000101'.
+              e_endda = '99991231'.
+            ENDIF.
+          ENDLOOP.
+        ELSE.
+          e_begda = '20000101'.
+          e_endda = '99991231'.
+        ENDIF.
+      CATCH cx_sql_exception INTO lx_sql.
+*        MESSAGE e000(123) WITH | Ошибки определения min max calday для { lv_exdtable } |.
+        MESSAGE e022(zposwh) WITH lv_exdtable.
+        WRITE: / | Ошибки определения min max calday для { lv_exdtable } |.
+        WRITE: / lx_sql->get_text( ).
+        WRITE: / lx_sql->sql_code.
+        WRITE: / lx_sql->sql_message.
+*       MESSAGE e000(124) WITH | { lv_stmt } |.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD GET_REMOTE_VIEW_NAME.
+    DATA(lv_vt) = i_vt.
+    DATA(lv_hdbtable) = i_hdbtable.
+
+    CASE lv_vt.
+      WHEN 'LOCK'.
+        CASE lv_hdbtable.
+          WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'
+            OR '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+            o_res = 'V_SET_LOCK_ITM'.
+          WHEN '/BIC/APNTO0352'
+            OR '/BIC/APNTO0353'.
+            o_res = 'V_SET_LOCK_HDR'.
+          WHEN '/BIC/APOSDO01C2'
+            OR '/BIC/APOSDO01C3'
+            OR '/BIC/APOSDO022'
+            OR '/BIC/APOSDO023'
+            OR '/BIC/APOSDO032'
+            OR '/BIC/APOSDO033'.
+            o_res = 'V_SET_LOCK_DIS'.
+          WHEN OTHERS.
+            o_res = ''.
+            WRITE: / | Неизв.таблица для блокировки { lv_hdbtable }|.
+*            MESSAGE e000(123) WITH | Неизв.таблица для блокировки  { lv_hdbtable }|.
+            MESSAGE e005(ZPOSWH) WITH lv_hdbtable.
+            RETURN.
+        ENDCASE.
+      WHEN 'REL'.
+        CASE lv_hdbtable.
+          WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'
+            OR '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+            o_res = 'V_RELEASE_LOCK_ITM'.
+          WHEN '/BIC/APNTO0352'
+            OR '/BIC/APNTO0353'.
+            o_res = 'V_RELEASE_LOCK_HDR'.
+          WHEN '/BIC/APOSDO01C2'
+            OR '/BIC/APOSDO01C3'
+            OR '/BIC/APOSDO022'
+            OR '/BIC/APOSDO023'
+            OR '/BIC/APOSDO032'
+            OR '/BIC/APOSDO033'.
+            o_res = 'V_RELEASE_LOCK_DIS'.
+          WHEN OTHERS.
+            o_res = ''.
+            WRITE: / | Неизв.таблица для блокировки { lv_hdbtable }|.
+*            MESSAGE e000(123) WITH | Неизв.таблица для блокировки  { lv_hdbtable }|.
+            MESSAGE e005(ZPOSWH) WITH lv_hdbtable.
+            RETURN.
+        ENDCASE.
+      WHEN 'RUN'.
+        CASE lv_hdbtable.
+          WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'
+            OR '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+            o_res = 'V_DWH_PROCESS_ITM'.
+          WHEN '/BIC/APNTO0352'
+            OR '/BIC/APNTO0353'.
+            o_res = 'V_DWH_PROCESS_HDR'.
+          WHEN '/BIC/APOSDO01C2'
+            OR '/BIC/APOSDO01C3'
+            OR '/BIC/APOSDO022'
+            OR '/BIC/APOSDO023'
+            OR '/BIC/APOSDO032'
+            OR '/BIC/APOSDO033'.
+            o_res = 'V_DWH_PROCESS_DIS'.
+          WHEN OTHERS.
+            o_res = ''.
+            WRITE: / | Неизв.таблица для запуска процесса в orcl { lv_hdbtable }|.
+*            MESSAGE e000(123) WITH | Неизв.таблица для блокировки  { lv_hdbtable }|.
+            MESSAGE e027(ZPOSWH) WITH lv_hdbtable.
+            RETURN.
+        ENDCASE.
+
+      WHEN 'CLEAR'.
+        CASE lv_hdbtable.
+          WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'
+            OR '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+            o_res = 'V_SA_CLEAR_ITM'.
+          WHEN '/BIC/APNTO0352'
+            OR '/BIC/APNTO0353'.
+            o_res = 'V_SA_CLEAR_HDR'.
+          WHEN '/BIC/APOSDO01C2'
+            OR '/BIC/APOSDO01C3'
+            OR '/BIC/APOSDO022'
+            OR '/BIC/APOSDO023'
+            OR '/BIC/APOSDO032'
+            OR '/BIC/APOSDO033'.
+            o_res = 'V_SA_CLEAR_DIS'.
+          WHEN OTHERS.
+            o_res = ''.
+            WRITE: / | Неизв.таблица в HANA { lv_hdbtable }|.
+            MESSAGE e006(ZPOSWH) WITH lv_hdbtable.
+            RETURN.
+        ENDCASE.
+      WHEN 'CHECK'.
+        CASE lv_hdbtable.
+          WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'.
+            o_res = 'POS_REC_ITM_RELOAD'.
+          WHEN '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+            o_res = 'POS_REC_ITM_DELTA'.
+          WHEN '/BIC/APNTO0352'.
+            o_res = 'POS_REC_HDR_RELOAD'.
+          WHEN '/BIC/APNTO0353'.
+            o_res = 'POS_REC_HDR_DELTA'.
+          WHEN '/BIC/APOSDO022' OR '/BIC/APOSDO032' OR '/BIC/APOSDO01C2'.
+            o_res = 'POS_DIS_ITM_RELOAD'.
+          WHEN '/BIC/APOSDO023' OR '/BIC/APOSDO033' OR '/BIC/APOSDO01C3'.
+            o_res = 'POS_DIS_ITM_DELTA'.
+          WHEN OTHERS.
+            o_res = ''.
+            WRITE: / | Неизв.таблица для сравнения { lv_hdbtable }|.
+            MESSAGE e007(ZPOSWH) WITH lv_hdbtable.
+            RETURN.
+        ENDCASE.
+      WHEN 'ENABL'.
+        CASE lv_hdbtable.
+          WHEN '/BIC/APOSRO162' OR '/BIC/APOSRO172' OR '/BIC/APOSRO182' OR '/BIC/APOSRO192'
+            OR '/BIC/APOSRO163' OR '/BIC/APOSRO173' OR '/BIC/APOSRO183' OR '/BIC/APOSRO193' .
+            o_res = 'POS_REC_ITM'.
+          WHEN '/BIC/APNTO0352' OR '/BIC/APNTO0353'.
+            o_res = 'POS_REC_HDR'.
+          WHEN '/BIC/APOSDO01C2' OR '/BIC/APOSDO01C3' OR '/BIC/APOSDO022' OR '/BIC/APOSDO023' OR '/BIC/APOSDO032' OR '/BIC/APOSDO033'.
+            o_res = 'POS_DIS_ITM'.
+          WHEN OTHERS.
+            o_res = ''.
+            WRITE: / | Неизв.таблица для enable/disable { lv_hdbtable }|.
+            MESSAGE e007(ZPOSWH) WITH lv_hdbtable.
+            RETURN.
+        ENDCASE.
+    ENDCASE.
+  ENDMETHOD.
+
+
+  METHOD get_wherecond_full.
+    DATA(lv_hdb_table) = in_hdbtable.
+
+    IF me->la_ignorewhere = ''.
+      SELECT SINGLE * INTO @DATA(ls_wherecond)
+        FROM zposwh_where
+       WHERE hdb_table = @lv_hdb_table.
+      IF ( sy-subrc = 0 ) AND ( ls_wherecond-whereclause IS NOT INITIAL ).
+        IF in_withwhere = 'X'.
+          out_where = | WHERE { ls_wherecond-whereclause }|.
+        ELSE.
+          out_where = ls_wherecond-whereclause.
+        ENDIF.
+      ELSE.
+        IF in_withwhere = 'X'.
+          out_where = ' WHERE (1 = 1) '.
+        ELSE.
+          out_where = ' (1 = 1) '.
+        ENDIF.
+      ENDIF.
+    ELSE.
+      out_where = ' (1 = 1) '.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD insert_pos_group.
+    DATA:
+      lo_conn       TYPE REF TO cl_sql_connection,
+      lo_statement  TYPE REF TO cl_sql_statement,
+      lo_result_set TYPE REF TO cl_sql_result_set,
+      lv_reqtsn     TYPE zpos_reqtsn,
+      lx_sql        TYPE REF TO cx_sql_exception.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_groupid)  = in_groupid.
+
+    DATA: lv_where_pk TYPE string,
+          lv_where    TYPE string,
+          lv_low      TYPE zposwh_split-low,
+          lv_high     TYPE zposwh_split-high.
+
+    " '00' - границы интервалов передаются через параметры
+    " !'00' - границы интервалов передаются через groupid в таблице БД
+    IF lv_groupid NE '00'.
+      SELECT SINGLE * INTO @DATA(ls_lohi)
+        FROM zposwh_split
+       WHERE id2 = @lv_groupid
+         AND hdb_table = @lv_hdbtable.
+      IF sy-subrc = 0.
+        lv_low  = ls_lohi-low.
+        lv_high = ls_lohi-high.
+      ELSE.
+        WRITE: / | Нет данных для группы с номером '{ lv_groupid }.'|.
+*        MESSAGE i000(124) WITH | Нет группы с номером '{ lv_groupid }.'|.
+        MESSAGE i008(ZPOSWH) WITH lv_groupid.
+        RETURN.
+      ENDIF.
+    ELSE.
+      lv_low = in_low. lv_high = in_high.
+    ENDIF.
+
+    IF lv_low IS INITIAL.
+      lv_where_pk = | pk < '{ lv_high }' |.
+    ELSEIF lv_high IS INITIAL.
+      lv_where_pk = | pk >= '{ lv_low }' |.
+    ELSEIF ( ( lv_low IS NOT INITIAL ) AND ( lv_high IS NOT INITIAL ) ).
+      lv_where_pk = | pk >= '{ lv_low }' AND pk < '{ lv_high }' |.
+    ENDIF.
+
+    IF lv_where_pk IS NOT INITIAL.
+      TRY.
+          CASE me->get_loadtype( in_hdbtable = lv_hdbtable ).
+            WHEN 'D'.
+              lv_reqtsn = me->get_delta_label( in_hdbtable = lv_hdbtable ).
+              DATA(lv_stmt) = me->get_insdelta_stmt(
+                        in_hdbtable = lv_hdbtable
+                        in_where    = lv_where_pk
+                        in_reqtsn   = lv_reqtsn
+                    ).
+            WHEN 'F'.
+              lv_where = me->get_wherecond_full( in_hdbtable = lv_hdbtable in_withwhere = '' ).
+              lv_stmt = me->get_insfull_stmt(
+                        in_hdbtable = lv_hdbtable
+                        in_where    = lv_where
+                        in_where_pk = lv_where_pk
+                        ).
+            WHEN OTHERS.
+*              MESSAGE i000(124) WITH ' Неизвестный тип таблицы для вставки '.
+              MESSAGE e000(ZPOSWH).
+              RETURN.
+          ENDCASE.
+          lo_conn = cl_sql_connection=>get_connection( ).
+          lo_statement = lo_conn->create_statement( ).
+          DATA(l_row_cnt) = lo_statement->execute_update( lv_stmt ).
+          WRITE: / lv_hdbtable, ': ', l_row_cnt, ' записей добавлено для  [', lv_low, ', ', lv_high, ']'.
+          " https://wiki.scn.sap.com/wiki/display/ABAP/Number+of+ways+to+display+the+messages
+*          MESSAGE i000(123) WITH | { l_row_cnt } записей добавлено для [ { lv_low }, { lv_high } ] |.
+          MESSAGE i009(ZPOSWH) WITH l_row_cnt lv_low lv_high.
+        CATCH cx_sql_exception INTO lx_sql.
+          WRITE: / lv_stmt, ' : ', lx_sql->get_text( ).
+          WRITE: / lx_sql->sql_code.
+          WRITE: / lx_sql->sql_message.
+*          MESSAGE e000(123) WITH | { lv_stmt } |.
+          MESSAGE e010(ZPOSWH) WITH lv_groupid.
+      ENDTRY.
+    ELSE.
+      WRITE: / ' Пустые границы интервала '.
+*      MESSAGE i000(124) WITH ' Пустые границы интервала '.
+      MESSAGE e011(ZPOSWH)  WITH lv_groupid.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD make_pos_group.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+*      lo_result_set TYPE REF TO cl_sql_result_set,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    DATA:
+      lt_res    TYPE REF TO data,
+      lv_res2   TYPE zpos_id2,
+      lv_pospk  TYPE zpos_pospk_s-pospk,
+      lv_idx    LIKE sy-tabix,
+      lv_reqtsn TYPE zpos_reqtsn.
+
+    DATA(lv_hdbtable) = in_hdbtable. " /BIC/APOSRO163 should be
+
+**** COMMENTED: вынесено в отдельный метод
+** проверка возможности блокировки
+*    IF me->set_lock_exd( in_hdbtable = lv_hdbtable ) = ''.
+*      RETURN.
+*    ENDIF.
+** очистка staging-таблиц
+*    IF in_clear = 'X'.
+*      IF me->clear_exd_table( in_hdbtable = lv_hdbtable ) = ''.
+*        RETURN.
+*      ENDIF.
+*    ENDIF.
+
+    CLEAR: me->lt_pos.
+    GET REFERENCE OF me->lt_pos INTO lt_res.
+    DATA(lv_grpcnt)   = me->la_grpcnt. " 5
+* очистка таблицы интервалов, чтобы заполнить ее после выполнения запроса ниже.
+    DELETE FROM zposwh_split
+     WHERE hdb_table = lv_hdbtable.
+    SELECT SINGLE * INTO @DATA(ls_lohi)
+      FROM zposwh_split
+     WHERE hdb_table = @lv_hdbtable.
+
+    TRY.
+        CASE me->get_loadtype( in_hdbtable = lv_hdbtable ).
+          WHEN 'D'.
+            lv_reqtsn = me->get_delta_label( in_hdbtable = lv_hdbtable ).
+            DATA(lv_stmt) = me->get_grpdelta_stmt(
+                        in_hdbtable = lv_hdbtable
+                        in_reqtsn   = lv_reqtsn
+                    ).
+          WHEN 'F'.
+            DATA(lv_where) = me->get_wherecond_full( in_hdbtable =   lv_hdbtable in_withwhere = 'X' ).
+            lv_stmt = me->get_grpfull_stmt(
+                        in_hdbtable = lv_hdbtable
+                        in_where    = lv_where
+                    ).
+          WHEN OTHERS.
+            MESSAGE e000(zposwh).
+            RETURN.
+        ENDCASE.
+
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+        l_res_ref->set_param_table( lt_res ).
+        l_res_ref->next_package( ).
+        l_res_ref->close( ).
+        " сохранение интервалов в таблице для дальнейшего использования в цепочках процессов
+        IF me->lt_pos IS NOT INITIAL.
+          DATA(lv_pos_cnt) = lines( me->lt_pos ). " число строк
+          lv_idx = 0.
+          LOOP AT me->lt_pos ASSIGNING FIELD-SYMBOL(<fs_pos>).
+            IF NOT ( ( lv_pos_cnt = me->la_grpcnt )
+                 AND ( sy-tabix = 1 ) ). " если число записей равно целевому числу групп, то надо исключить обработку 1-ой записи: ее ключ будет учтен в следующей группе (т.к. <= ).
+*              lv_idx = sy-tabix. комментировано, т.к. номер строки создаем без привязки к номеру записи в itab.
+              lv_idx = lv_idx + 1.
+              ls_lohi-hdb_table = lv_hdbtable.
+              ls_lohi-id2 = lv_idx.
+              ls_lohi-low = lv_pospk.
+              ls_lohi-high = <fs_pos>-pospk.
+              INSERT INTO zposwh_split VALUES ls_lohi.
+              IF sy-dbcnt NE 1.
+                WRITE: / 'Ошибка добавления значения в zposwh_split'.
+                MESSAGE e001(zposwh) WITH ls_lohi-low ls_lohi-high.
+              ENDIF.
+              lv_pospk = <fs_pos>-pospk.
+            ENDIF.
+          ENDLOOP.
+
+          ls_lohi-id2 = lv_idx + 1.
+          ls_lohi-low = lv_pospk.
+          CLEAR ls_lohi-high.
+*        ls_lohi-high = '9999999999999999999999999999999999999'.
+          INSERT INTO zposwh_split VALUES ls_lohi.
+          IF sy-dbcnt NE 1.
+            WRITE: / 'Error adding value into zpos_lohi'.
+            MESSAGE e001(zposwh) WITH ls_lohi-low ls_lohi-high.
+          ELSE.
+            MESSAGE i002(zposwh).
+          ENDIF.
+        ELSE.
+*          MESSAGE i000(123) WITH |Групп для { lv_hdbtable } не создано. Нет данных. |.
+          MESSAGE i003(zposwh).
+        ENDIF.
+      CATCH cx_sql_exception INTO lx_sql.
+        WRITE: / lv_stmt, ' : ', lx_sql->get_text( ).
+        WRITE: / lx_sql->sql_code.
+        WRITE: / lx_sql->sql_message.
+        MESSAGE e004(zposwh).
+    ENDTRY.
+  ENDMETHOD.
+
+  METHOD set_delta_label.
+    DATA:
+      ls_delta  TYPE zposwh_delta_tsn.
+
+    IF in_reqtsn IS NOT INITIAL. " явное указание записи в дельта-таблице. Пока не используется
+    ENDIF.
+
+    CLEAR: ot_res. " пусто - ошибка
+    CASE in_hdbtable.
+      WHEN '/BIC/APOSRO163'.
+        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+          FROM /bic/aposro163.
+      WHEN '/BIC/APOSRO173'.
+        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+          FROM /bic/aposro173.
+*      WHEN '/BIC/APOSRO183'.
+*        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+*          FROM /bic/aposro183.
+      WHEN '/BIC/APNTO0353'.
+        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+          FROM /bic/apnto0353.
+      WHEN '/BIC/APOSDO01C3'.
+        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+          FROM /bic/aposdo01c3.
+      WHEN '/BIC/APOSDO023'.
+        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+          FROM /bic/aposdo023.
+      WHEN '/BIC/APOSDO033'.
+        SELECT MAX( reqtsn ) INTO ls_delta-reqtsn
+          FROM /bic/aposdo033.
+      WHEN OTHERS.
+        WRITE: / 'Несуществующая таблица changelog'.
+*        MESSAGE e000(123) WITH |Несуществующая таблица changelog  |.
+        MESSAGE e012(zposwh) WITH in_hdbtable.
+    ENDCASE.
+    IF ls_delta-reqtsn IS NOT INITIAL.
+      ls_delta-hdb_table = in_hdbtable.
+      UPDATE zposwh_delta_tsn FROM @ls_delta.
+      IF sy-dbcnt = 0.
+        INSERT INTO zposwh_delta_tsn VALUES ls_delta.
+        IF sy-dbcnt NE 1.
+          WRITE: / 'Ошибка добавления записей в ZPOSWH_DELTA_TSN'.
+*          MESSAGE e000(123) WITH |Ошибка добавления записей { ls_delta-reqtsn  }, { in_hdbtable } в ZPOSWH_DELTA_TSN |.
+          MESSAGE e013(zposwh) WITH ls_delta-reqtsn in_hdbtable.
+        ELSE.
+          ot_res = '00'. " нет ошибки
+        ENDIF.
+      ELSE.
+        ot_res = '00'. " нет ошибки
+      ENDIF.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD SET_REMOTE_FLOW_ACTIVE.
+*a.       Деактивация всех потоков (при необходимости)
+*update staging.bw_ora_tables
+*set enabled = 'N' --деактивация
+*where dwh_table = 'POS_REC_ITM'; -- название потока
+*
+*b.      Полный процессинг:
+*update staging.bw_ora_tables
+*set full_from = to_date('01.01.2015', 'dd.mm.yyyy'), -- дата с
+*full_to = to_date('31.12.2015', 'dd.mm.yyyy'),  -- дата по
+*increment_load = 'N',  --признак полной загрузки
+*enabled = 'Y'  --активация потока
+*where staging_table = 'POS_REC_ITM_RELOAD'; --название потока
+*
+*c.       Дельта загрузка:
+*update staging.bw_ora_tables
+*set increment_load = 'Y', --признак дельты
+*enabled = 'Y'  --активация потока
+*where staging_table = 'POS_REC_ITM_DELTA'; --название потока
+
+    TYPES:
+      BEGIN OF tt_begendda,
+        begda TYPE dats,
+        endda TYPE dats,
+      END OF tt_begendda.
+    DATA:
+      lo_conn       TYPE REF TO cl_sql_connection,
+      lo_statement  TYPE REF TO cl_sql_statement,
+      lo_result_set TYPE REF TO cl_sql_result_set,
+      lv_reqtsn     TYPE zpos_reqtsn,
+      lx_sql        TYPE REF TO cx_sql_exception,
+      lv_stmt       TYPE string,
+      ls_begendda   TYPE tt_begendda,
+      lv_begdastr   TYPE string,
+      lv_enddastr   TYPE string.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_staging_t) = me->GET_REMOTE_VIEW_NAME(
+                  i_hdbtable = lv_hdbtable
+                  i_vt       = 'CHECK'
+              ).
+
+* for SET enabled=N условие на staging_table
+*    DATA(lv_target_t) = lv_staging_t.
+*    REPLACE REGEX '_(DELTA|RELOAD)\s*$' IN lv_target_t WITH ''.
+*    CONDENSE lv_target_t NO-GAPS.
+
+    CLEAR: out_res.
+*    " Деактивация
+*    TRY.
+*        lv_stmt = | UPDATE "{ me->la_exd_schema }"."BW_ORA_TABLES" SET enabled = 'N' |
+**               && |  WHERE dwh_table = '{ lv_target_t }'|.
+*               && |  WHERE staging_table = '{ lv_staging_t }'|.
+*        lo_conn = cl_sql_connection=>get_connection( ).
+*        lo_statement = lo_conn->create_statement( ).
+*        DATA(l_row_cnt) = lo_statement->execute_update( lv_stmt ).
+**        WRITE: / | Деактивация { lv_target_t } процессинга выполнена ОК. { l_row_cnt } строк| .
+*        WRITE: / | Деактивация { lv_staging_t } процессинга выполнена ОК. { l_row_cnt } строк| .
+*        MESSAGE i032(zposwh) WITH lv_staging_t l_row_cnt.
+**        out_res = 'X'.
+*      CATCH cx_sql_exception INTO lx_sql.
+**        WRITE: / | Деактивация { lv_target_t } процессинга выполнена с ошибками. { l_row_cnt } строк| .
+*        WRITE: / | Деактивация { lv_staging_t } процессинга выполнена с ошибками. { l_row_cnt } строк| .
+**        MESSAGE e033(zposwh) WITH lv_target_t l_row_cnt.
+*        MESSAGE e033(zposwh) WITH lv_staging_t l_row_cnt.
+*        RETURN.
+*    ENDTRY.
+   TRY.
+    IF me->SET_REMOTE_FLOW_INACTIVE( in_hdbtable = in_hdbtable ) = 'X'.
+      " Активация
+
+          DATA(lv_dt) = me->get_loadtype( in_hdbtable = lv_hdbtable ).
+          CASE lv_dt.
+            WHEN 'D'.
+
+              SET_REMOTE_PARAM(
+                i_table       = lv_staging_t
+                i_table_type  = 'STAGING'
+                i_enabled     = 'Y'
+                i_delta_mode  = 'Y'
+              ).
+
+            WHEN 'F'.
+
+              SELECT SINGLE begda endda INTO CORRESPONDING FIELDS OF ls_begendda
+                FROM zposwh_where
+               WHERE hdb_table = lv_hdbtable.
+
+              SET_REMOTE_PARAM(
+                i_table       = lv_staging_t
+                i_table_type  = 'STAGING'
+                i_enabled     = 'Y'
+                i_delta_mode  = 'N'
+                i_period_from = ls_begendda-begda && ''
+                i_period_to   = ls_begendda-endda && ''
+              ).
+
+
+            WHEN OTHERS.
+              MESSAGE e000(zposwh).
+              RETURN.
+          ENDCASE.
+
+          lo_conn = cl_sql_connection=>get_connection( ).
+
+*          lo_statement = lo_conn->create_statement( ).
+*          DATA(l_row_cnt) = lo_statement->execute_update( lv_stmt ).
+          lo_conn->commit( ).
+
+          WRITE: / | Настройка { lv_dt } процессинга выполнена ОК.|. " { l_row_cnt } строк| .
+          MESSAGE i030(zposwh) WITH lv_dt.
+          out_res = 'X'.
+        ENDIF.
+      CATCH cx_sql_exception INTO lx_sql.
+        lo_conn->rollback( ).
+        WRITE: / | Настройка { lv_dt } процессинга выполнена с ошибками | ." { l_row_cnt } строк| .
+        WRITE: / lx_sql->sql_code.
+        WRITE: / lx_sql->sql_message.
+        MESSAGE e031(zposwh) WITH lv_dt.
+    ENDTRY.
+
+  ENDMETHOD.
+
+  METHOD SET_REMOTE_FLOW_INACTIVE.
+*a.       Деактивация всех потоков (при необходимости)
+*update staging.bw_ora_tables
+*set enabled = 'N' --деактивация
+*where dwh_table = 'POS_REC_ITM'; -- название потока
+*
+*b.      Полный процессинг:
+*update staging.bw_ora_tables
+*set full_from = to_date('01.01.2015', 'dd.mm.yyyy'), -- дата с
+*full_to = to_date('31.12.2015', 'dd.mm.yyyy'),  -- дата по
+*increment_load = 'N',  --признак полной загрузки
+*enabled = 'Y'  --активация потока
+*where staging_table = 'POS_REC_ITM_RELOAD'; --название потока
+*
+*c.       Дельта загрузка:
+*update staging.bw_ora_tables
+*set increment_load = 'Y', --признак дельты
+*enabled = 'Y'  --активация потока
+*where staging_table = 'POS_REC_ITM_DELTA'; --название потока
+
+    TYPES:
+      BEGIN OF tt_begendda,
+        begda TYPE dats,
+        endda TYPE dats,
+      END OF tt_begendda.
+    DATA:
+      lo_conn       TYPE REF TO cl_sql_connection,
+      lo_statement  TYPE REF TO cl_sql_statement,
+      lo_result_set TYPE REF TO cl_sql_result_set,
+      lv_reqtsn     TYPE zpos_reqtsn,
+      lx_sql        TYPE REF TO cx_sql_exception,
+      lv_stmt       TYPE string.
+
+    DATA(lv_hdbtable) = in_hdbtable.
+    DATA(lv_dwh_t) = me->GET_REMOTE_VIEW_NAME(
+                  i_hdbtable = lv_hdbtable
+                  i_vt       = 'ENABL'
+              ).
+
+* for SET enabled=N условие на staging_table
+*    DATA(lv_target_t) = lv_dwh_t.
+*    REPLACE REGEX '_(DELTA|RELOAD)\s*$' IN lv_target_t WITH ''.
+*    CONDENSE lv_target_t NO-GAPS.
+
+    CLEAR: out_res.
+" Деактивация
+    TRY.
+        lo_conn = cl_sql_connection=>get_connection( ).
+
+        SET_REMOTE_PARAM(
+          i_table       = lv_dwh_t
+          i_table_type  = 'DWH'
+          i_enabled     = 'N'
+        ).
+
+*        lv_stmt = | UPDATE "{ me->la_exd_schema }"."BW_ORA_TABLES" SET enabled = 'N' |
+*               && |  WHERE dwh_table = '{ lv_dwh_t }'|.
+
+
+
+*        lo_statement = lo_conn->create_statement( ).
+*        DATA(l_row_cnt) = lo_statement->execute_update( lv_stmt ).
+
+        lo_conn->commit( ).
+
+*        WRITE: / | Деактивация { lv_target_t } процессинга выполнена ОК. { l_row_cnt } строк| .
+        WRITE: / | Деактивация { lv_dwh_t } процессинга выполнена ОК.|." { l_row_cnt } строк| .
+        MESSAGE i032(zposwh) WITH lv_dwh_t. " l_row_cnt.
+        out_res = 'X'.
+      CATCH cx_sql_exception INTO lx_sql.
+*        WRITE: / | Деактивация { lv_target_t } процессинга выполнена с ошибками. { l_row_cnt } строк| .
+        lo_conn->rollback( ).
+        WRITE: / | Деактивация { lv_dwh_t } процессинга выполнена с ошибками.|. " { l_row_cnt } строк| .
+*        MESSAGE e033(zposwh) WITH lv_target_t l_row_cnt.
+        MESSAGE e033(zposwh) WITH lv_dwh_t. " l_row_cnt.
+        RETURN.
+    ENDTRY.
+  ENDMETHOD.
+
+
+    METHOD SET_REMOTE_PARAM
+        BY DATABASE PROCEDURE FOR HDB
+        LANGUAGE SQLSCRIPT.
+
+      CALL "_SYS_BIC"."demo.bw.export.posdwh::POSDWH_SET_PARAM_SP01"(
+          i_table, i_table_type, i_enabled, i_delta_mode, i_period_from, i_period_to
+      );
+
+  ENDMETHOD.
+ENDCLASS.
