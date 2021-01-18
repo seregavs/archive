@@ -1,0 +1,230 @@
+*&---------------------------------------------------------------------*
+*& Report ZR_BW_EXPORT_TAX_V1
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zr_bw_export_tax_v1.
+
+CONSTANTS: lc_extension(3) TYPE c VALUE 'csv',
+           lc_delim(1)     TYPE c VALUE ';'.
+
+TYPES: t_set    TYPE STANDARD TABLE OF string   WITH EMPTY KEY,
+       t_setset TYPE STANDARD TABLE OF t_set    WITH EMPTY KEY.
+
+DATA:
+  t_file       TYPE filetable,
+  lv_fileno(3) TYPE n,
+  lv_filename  TYPE string,
+  lv_path      TYPE string,
+  lv_fullpath  TYPE string,
+  lt_set       TYPE t_set,
+  lt_setset    TYPE t_setset,
+  lv_hdrflg(1) TYPE n.
+
+DATA: bukrs_wa  TYPE zmfico_i001,
+      prctr_wa  TYPE zmfico_i012,
+      ptdate_wa TYPE zmfico_ctxq2.
+
+RANGES: r_deduct FOR zmfico_ctxq2-/bic/mfiioc080.
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-001.
+SELECT-OPTIONS: s_bukrs FOR bukrs_wa-/bic/mfiioc001  OBLIGATORY NO INTERVALS NO-EXTENSION DEFAULT 'MGF',
+                s_prctr FOR prctr_wa-/bic/mfiioc012,
+                s_ptdate FOR ptdate_wa-/bic/mfiioc081 OBLIGATORY NO-EXTENSION.
+
+PARAMETERS: chbox AS CHECKBOX DEFAULT 'X'.
+
+PARAMETERS: p_hier(5)  TYPE c DEFAULT 'PTA17' OBLIGATORY,
+            p_rldnr(2) TYPE c DEFAULT 'TL' OBLIGATORY.
+SELECTION-SCREEN END OF BLOCK b1.
+
+SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE TEXT-002.
+PARAMETERS: p_psize(6)  TYPE n DEFAULT '50000' OBLIGATORY,
+            p_file(128) TYPE c OBLIGATORY.
+SELECTION-SCREEN END OF BLOCK b2.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  REFRESH t_file.
+  CALL METHOD cl_gui_frontend_services=>file_save_dialog
+    EXPORTING
+      window_title              = 'Выберите файл'
+*     default_extension         = 'csv'
+      default_file_name         = 'export'
+*     with_encoding             =
+*     file_filter               =     " File Type Filter Table
+      initial_directory         = 'C:\Temp\TL'
+*     prompt_on_overwrite       = 'X'
+    CHANGING
+      filename                  = lv_filename
+      path                      = lv_path
+      fullpath                  = lv_fullpath
+*     user_action               =     " User Action (C Class Const ACTION_OK, ACTION_OVERWRITE etc)
+*     file_encoding             =
+    EXCEPTIONS
+      cntl_error                = 1
+      error_no_gui              = 2
+      not_supported_by_gui      = 3
+      invalid_default_file_name = 4
+      OTHERS                    = 5.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+  IF ( lv_filename IS NOT INITIAL ) AND ( lv_path IS NOT INITIAL ).
+    p_file = lv_fullpath.
+  ENDIF.
+
+
+START-OF-SELECTION.
+  IF chbox = 'X'.
+    r_deduct-sign = 'I'.
+    r_deduct-option = 'EQ'.
+    r_deduct-low = 'I'.
+    APPEND r_deduct.
+  ELSE.
+    CLEAR r_deduct.
+  ENDIF.
+
+  SELECT
+    /bic/mfiioc001,   "БЕ
+    /bic/mfiioc001_txt,  "БЕ (текст)
+    /bic/mfiioc084,   "Год
+    /bic/mfiioc048,   "Номер документа
+    /bic/mfiioc049,   "Строка проводки
+    /bic/mfiioc000,   "План счетов
+    /bic/mfiioc045,   "Основной счет
+    /bic/mfiioc088,   "Документ сторно
+    /bic/mfiioc089,   "Год документа сторно
+    /bic/mfiioc062,   "Код проводки
+    /bic/mfiioc008,   "КЕ
+    /bic/mfiioc012,   "МВП
+    /bic/mfiioc012_txt,  "МВП (текст)
+    /bic/mfiioc059,   "Вид документа
+    /bic/mfiioc086,   "Вид затрат
+    /bic/mfiioc078,   "ЭНУ
+    /bic/mfiioc081,   "Дата налоговой декларации
+    /bic/mfiioc054,   "Дата документа
+    /bic/mfiioc055,   "Дата проводки
+    /bic/mfiioc087,   "Ссылка
+    /bic/mfiioc056,   "Текст позиции
+    creditor,
+    creditor_txt,
+    debitor,
+    debitor_txt,
+    /bic/mfiioc085,  "Присвоение
+    /bic/mallec013,  "Номер договора
+    /bic/mallec014,  "Дата договора
+    /bic/mfiiof066,  "Сумма в валюте БЕ
+    loc_currcy       "Валюта БЕ
+   FROM zmfico_c_txq2( p_hier = @p_hier, p_rldnr = @p_rldnr )
+   WHERE /bic/mfiioc001 IN @s_bukrs AND
+         /bic/mfiioc012 IN @s_prctr AND
+         /bic/mfiioc080 IN @r_deduct AND
+         /bic/mfiioc081 IN @s_ptdate
+   INTO TABLE @DATA(lt_data) PACKAGE SIZE @p_psize.
+    CLEAR: lt_set.
+    lv_hdrflg = 0.
+    LOOP AT lt_data ASSIGNING FIELD-SYMBOL(<fs_data>).
+      DATA(lv_str_part_1) = |{ <fs_data>-/bic/mfiioc001 }{ lc_delim }{ <fs_data>-/bic/mfiioc001_txt }{ lc_delim }{ <fs_data>-/bic/mfiioc084 }{ lc_delim }{ <fs_data>-/bic/mfiioc048 }{ lc_delim }|.
+      DATA(lv_str_part_2) = |{ <fs_data>-/bic/mfiioc049 }{ lc_delim }{ <fs_data>-/bic/mfiioc000 }{ lc_delim }{ <fs_data>-/bic/mfiioc045 }{ lc_delim }{ <fs_data>-/bic/mfiioc088 }{ lc_delim }{ <fs_data>-/bic/mfiioc089 }{ lc_delim }|.
+      DATA(lv_str_part_3) = |{ <fs_data>-/bic/mfiioc062 }{ lc_delim }{ <fs_data>-/bic/mfiioc008 }{ lc_delim }{ <fs_data>-/bic/mfiioc012 }{ lc_delim }{ <fs_data>-/bic/mfiioc012_txt }{ lc_delim }{ <fs_data>-/bic/mfiioc059 }{ lc_delim }|.
+      DATA(lv_str_part_4) = |{ <fs_data>-/bic/mfiioc086 }{ lc_delim }{ <fs_data>-/bic/mfiioc078 }{ lc_delim }{ <fs_data>-/bic/mfiioc081 }{ lc_delim }{ <fs_data>-/bic/mfiioc054 }{ lc_delim }{ <fs_data>-/bic/mfiioc055 }{ lc_delim }|.
+      DATA(lv_str_part_5) = |{ <fs_data>-/bic/mfiioc087 }{ lc_delim }{ <fs_data>-/bic/mfiioc056 }{ lc_delim }{ <fs_data>-creditor }{ lc_delim }{ <fs_data>-creditor_txt }{ lc_delim }{ <fs_data>-debitor }{ lc_delim }{ <fs_data>-debitor_txt }{ lc_delim }|.
+      DATA(lv_str_part_6) = |{ <fs_data>-/bic/mfiioc085 }{ lc_delim }{ <fs_data>-/bic/mallec013 }{ lc_delim }{ <fs_data>-/bic/mallec014 }{ lc_delim }{ <fs_data>-/bic/mfiiof066 }{ lc_delim }{ <fs_data>-loc_currcy }|.
+      CONCATENATE lv_str_part_1 lv_str_part_2 lv_str_part_3 lv_str_part_4 lv_str_part_5 lv_str_part_6 INTO DATA(lv_str).
+
+      IF lv_hdrflg = 0.
+        DATA(lv_hdr_part_1) = |БЕ{ lc_delim }Наименование БЕ{ lc_delim }Год{ lc_delim }Номер документа{ lc_delim }|.
+        DATA(lv_hdr_part_2) = |Строка проводки{ lc_delim }План счетов{ lc_delim }Номер счета{ lc_delim }Документ сторно{ lc_delim }Год документа сторно{ lc_delim }|.
+        DATA(lv_hdr_part_3) = |Код проводки{ lc_delim }КЕ{ lc_delim }МВП{ lc_delim }Наименование МВП{ lc_delim }Вид документа{ lc_delim }|.
+        DATA(lv_hdr_part_4) = |Вид затрат{ lc_delim }ЭНУ{ lc_delim }Дата налоговой декларации{ lc_delim }Дата документа{ lc_delim }Дата проводки{ lc_delim }|.
+        DATA(lv_hdr_part_5) = |Ссылка (внешний номер документа){ lc_delim }Текст позиции{ lc_delim }Кредитор{ lc_delim }Наименование кредитора{ lc_delim }Дебитор{ lc_delim }Наименование дебитора{ lc_delim }|.
+        DATA(lv_hdr_part_6) = |Присвоение (номер договора){ lc_delim }Номер договора{ lc_delim }Дата договора{ lc_delim }Сумма в валюте БЕ{ lc_delim }Валюта БЕ|.
+        CONCATENATE lv_hdr_part_1 lv_hdr_part_2 lv_hdr_part_3 lv_hdr_part_4 lv_hdr_part_5 lv_hdr_part_6 INTO DATA(lv_hdr).
+        APPEND lv_hdr TO lt_set.
+        lv_hdrflg = 1.
+      ENDIF.
+
+      APPEND lv_str TO lt_set.
+    ENDLOOP.
+    APPEND lt_set TO lt_setset.
+  ENDSELECT.
+
+  DATA(lv_setcount) = lines( lt_setset ).
+  DO lv_setcount TIMES.
+    lv_fileno = sy-index.
+    lv_filename = |{ p_file }{ lv_fileno }.{ lc_extension }|.
+    cl_gui_frontend_services=>gui_download(
+      EXPORTING
+*          bin_filesize              =     " File length for binary files
+        filename                  =     lv_filename
+*          filetype                  = 'ASC'    " File type (ASCII, binary ...)
+*          append                    = SPACE    " Character Field Length 1
+*          write_field_separator     = SPACE    " Separate Columns by Tabs in Case of ASCII Download
+*          header                    = '00'    " Byte Chain Written to Beginning of File in Binary Mode
+*          trunc_trailing_blanks     = SPACE    " Do not Write Blank at the End of Char Fields
+*          write_lf                  = 'X'    " Insert CR/LF at End of Line in Case of Char Download
+*          col_select                = SPACE    " Copy Only Selected Columns of the Table
+*          col_select_mask           = SPACE    " Vector Containing an 'X' for the Column To Be Copied
+*          dat_mode                  = SPACE    " Numeric and date fields are in DAT format in WS_DOWNLOAD
+*          confirm_overwrite         = SPACE    " Overwrite File Only After Confirmation
+*          no_auth_check             = SPACE    " Switch off Check for Access Rights
+*          codepage                  =     " Character Representation for Output
+*          ignore_cerr               = ABAP_TRUE    " Ignore character set conversion errors?
+*          replacement               = '#'    " Replacement Character for Non-Convertible Characters
+*          write_bom                 = SPACE    " If set, writes a Unicode byte order mark
+*          trunc_trailing_blanks_eol = 'X'    " Remove Trailing Blanks in Last Column
+*          wk1_n_format              = SPACE
+*          wk1_n_size                = SPACE
+*          wk1_t_format              = SPACE
+*          wk1_t_size                = SPACE
+*          show_transfer_status      = 'X'    " Enables suppression of transfer status message
+*          fieldnames                =     " Table Field Names
+*          write_lf_after_last_line  = 'X'    " Writes a CR/LF after final data record
+*          virus_scan_profile        = '/SCET/GUI_DOWNLOAD'    " Virus Scan Profile
+*        IMPORTING
+*          filelength                =     " Number of bytes transferred
+      CHANGING
+        data_tab                  =     lt_setset[ sy-index ]
+      EXCEPTIONS
+        file_write_error          = 1
+        no_batch                  = 2
+        gui_refuse_filetransfer   = 3
+        invalid_type              = 4
+        no_authority              = 5
+        unknown_error             = 6
+        header_not_allowed        = 7
+        separator_not_allowed     = 8
+        filesize_not_allowed      = 9
+        header_too_long           = 10
+        dp_error_create           = 11
+        dp_error_send             = 12
+        dp_error_write            = 13
+        unknown_dp_error          = 14
+        access_denied             = 15
+        dp_out_of_memory          = 16
+        disk_full                 = 17
+        dp_timeout                = 18
+        file_not_found            = 19
+        dataprovider_exception    = 20
+        control_flush_error       = 21
+        not_supported_by_gui      = 22
+        error_no_gui              = 23
+        OTHERS                    = 24
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+                 WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDDO.
+
+  DATA: lv_fileno_disp TYPE i.
+  lv_fileno_disp = lv_fileno.
+  IF lv_fileno_disp = 0.
+    MESSAGE i000(02) WITH |Нет данных для выгрузки|.
+  ELSE.
+    MESSAGE i000(01) WITH |Выгрузка данных завершена|.
+    WRITE |Файлы сохранены в: { lv_path } |.
+    WRITE / |Количество файлов: { lv_fileno_disp } |.
+  ENDIF.

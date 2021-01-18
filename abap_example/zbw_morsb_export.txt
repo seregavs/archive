@@ -1,0 +1,172 @@
+*&---------------------------------------------------------------------*
+*& Report ZBW_MORSB_EXPORT
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+report zbw_morsb_export.
+
+constants: lc_extension(3) type c value 'csv',
+           lc_delim(1)     type c value ';'.
+
+types:
+  begin of t_selection,
+    bukrs type bukrs,
+    anln1 type anln1,
+    anln2 type anln2,
+  end of t_selection,
+
+  t_set    type standard table of string   with empty key,
+  t_setset type standard table of t_set    with empty key.
+
+data:
+  lv_selection    type t_selection,
+  lv_filename     type string,
+  lv_filenamepath type string,
+  lv_logpath      type filepath-pathintern,
+  lv_indx2(2)     type n,
+  lt_set          type t_set,
+  lt_setset       type t_setset.
+
+selection-screen begin of block b1 with frame title text-001.
+select-options: s_bukrs for lv_selection-bukrs  obligatory no intervals no-extension default 'MGF',
+                s_anln1 for lv_selection-anln1.
+parameters: p_gjahr type gjahr default '2017',
+            p_monat type monat default '11',
+            p_logfl type filename-fileintern default 'ZOPEN_HUB_FOR_morsb_FIXED_ASSETS'.
+selection-screen end of block b1.
+
+start-of-selection.
+  " получаем физическое файла и логический путь
+  call function 'FILE_GET_NAME_AND_LOGICAL_PATH'
+    exporting
+      client                     = sy-mandt
+      logical_filename           = p_logfl
+    importing
+      file_name                  = lv_filename
+      logical_path               = lv_logpath
+    exceptions
+      file_not_found             = 1
+      operating_system_not_found = 2
+      file_system_not_found      = 3
+      others                     = 4.
+  if sy-subrc <> 0.
+    write: / 'E004: Ошибка генерации краткого имени файла'.
+    return.
+  endif.
+  call function 'FILE_GET_NAME_USING_PATH'
+    exporting
+      client                     = sy-mandt
+      logical_path               = lv_logpath
+      file_name                  = lv_filename
+    importing
+      file_name_with_path        = lv_filenamepath
+    exceptions
+      path_not_found             = 1
+      missing_parameter          = 2
+      operating_system_not_found = 3
+      file_system_not_found      = 4
+      others                     = 5.
+  if sy-subrc <> 0.
+    write: / 'E005: Ошибка генерации полного имени файла'.
+    return.
+  endif.
+
+  if lv_filenamepath is not initial.
+    case p_logfl.
+      when 'ZOPEN_HUB_FOR_morsb_FIXED_ASSETS'.
+        do p_monat times.
+          lv_indx2  = sy-index.
+          select
+            bukrs,
+            anln1,
+            anln2,
+            gjahr,
+            monat,
+            afaber,
+            anlkl,
+            invnr,
+            aktiv,
+            deakt,
+            anlue,
+            eigkz,
+            txa50,
+            zzakt_num,
+            lifnr,
+            vmgli,
+            ord42,
+            pernr,
+            werks,
+            caufn,
+            gsber,
+            raumn,
+            stort,
+            equnr,
+            matnr,
+            mapar,
+            serge,
+            sernr,
+            kansw, " Первоначальная стоимость нарастающим итогом
+            knafa, " Типовая амортизация нарастающим итогом
+            aufwv, " Долевое повышение восстановительной стоимости НарастИтогом
+            aufwl, " Долевое годовое повышение восстановительной стоимости
+            aufwb, " Проведенное повышение восстановительной стоимости
+            aufwz, " Проводимое  повышение восстановительной стоимости
+            anbtr, " Корректировки ПСт на период
+            tt,
+            currency
+          from  zia_i_morsb_03( p_gjahr = @p_gjahr, p_monat = @lv_indx2 )
+            into table @data(lt_morsba_p)
+           where bukrs in @s_bukrs
+            and anln1 in @s_anln1.
+          data: lt_morsba_c like lt_morsba_p.
+          append lines of lt_morsba_p to lt_morsba_c.
+        enddo.
+
+        loop at lt_morsba_c assigning field-symbol(<fs>).
+          data(lv_str_part_1) = |{ <fs>-bukrs }{ lc_delim }{ <fs>-anln1 }{ lc_delim }{ <fs>-anln2 }{ lc_delim }{ <fs>-txa50 }{ lc_delim }|.
+          data(lv_str_part_2) = |{ <fs>-aktiv }{ lc_delim }{ <fs>-deakt }{ lc_delim }{ <fs>-tt    }{ lc_delim }0{ lc_delim }0{ lc_delim }|.
+          data(lv_str_part_3) = |{ <fs>-currency }{ lc_delim }{ <fs>-invnr }{ lc_delim }{ <fs>-sernr }{ lc_delim }{ <fs>-stort }{ lc_delim }|.
+          data(lv_str_part_4) = |{ <fs>-pernr }{ lc_delim }{ <fs>-werks }{ lc_delim }{ <fs>-anlkl }{ lc_delim }{ <fs>-anlue }{ lc_delim }|.
+          data(lv_str_part_5) = ||.
+          concatenate lv_str_part_1 lv_str_part_2 lv_str_part_3 lv_str_part_4 lv_str_part_5 into data(lv_str).
+          append lv_str to lt_set.
+        endloop.
+
+      when 'ZOPEN_HUB_FOR_morsb'. " ГК
+         IF s_bukrs IS INITIAL.
+           REPLACE ALL OCCURRENCES OF 'XXXX' IN lv_filenamepath WITH 'ALL'.
+         ELSE.
+           REPLACE ALL OCCURRENCES OF 'XXXX' IN lv_filenamepath WITH s_bukrs-low.
+         ENDIF.
+
+      when 'ZOPEN_HUB_morsb_CUSTOMER'. " Клиенты
+
+      when 'ZOPEN_HUB_morsb_VENDOR'.   " Поставщики
+
+    endcase.
+
+    " выгрузка lt_set в файл по пути (без GUI DOWNLOAD).
+    lv_str = 'Демо-выгрузка!!;'.
+    append lv_str to lt_set.
+    " конец демо-выгрузке
+
+    if lt_set is not initial.
+      try.
+          open dataset lv_filenamepath  for output in text mode encoding utf-8.
+          if sy-subrc = 0.
+            loop at lt_set into lv_str.
+              transfer lv_str to lv_filenamepath.
+            endloop.
+            close dataset lv_filenamepath.
+          endif.
+        catch cx_root into data(oref).
+          data(text) = oref->get_text( ).
+          write: / 'E003: ', text.
+          return.
+      endtry.
+    else.
+      write: / 'E001: ', lv_filenamepath, ': нет данных для выгрузки'.
+    endif.
+  else.
+    write: / 'E002: ', lv_filenamepath, ': ошибка генерации имения файла для выгрузки'.
+  endif.

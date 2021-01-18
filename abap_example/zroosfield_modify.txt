@@ -1,0 +1,28 @@
+*&---------------------------------------------------------------------*
+*& Report ZROOSFIELD_MODIFY
+*&---------------------------------------------------------------------*
+*& корректировка свойств полей в структуре переноса, чтобы они передавались в BW
+*& надо для полей в FI_ACDOCA_10
+*&---------------------------------------------------------------------*
+report zroosfield_modify.
+
+parameters:
+  p_field(10) type c obligatory default 'WW101_PA',
+  p_datas(30) type c obligatory default '0FI_ACDOCA_10',
+  p_test(1)   type c default 'X'.
+
+
+select single * into @data(ls_roosfield)
+  from roosfield
+ where objvers = 'A'
+   and oltpsource = @p_datas
+   and field = @p_field.
+if sy-subrc = 0.
+  write: / ls_roosfield-oltpsource, '-' ,ls_roosfield-field,' found in active version!'.
+  if p_test = ''.
+    update roosfield set selection = 'X'
+     where oltpsource = p_datas
+       and field = p_field.
+    write: / 'Updated ', sy-dbcnt, ' records'.
+  endif.
+endif.
