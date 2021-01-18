@@ -1,0 +1,157 @@
+data: l_iref_template    type ref to cl_bds_document_set,
+        l_oref_container   type ref to cl_gui_custom_container,
+        l_iref_control     type ref to i_oi_container_control,
+        l_iref_error       type ref to i_oi_error,
+        l_iref_document    type ref to i_oi_document_proxy,
+        l_iref_spreadsheet type ref to i_oi_spreadsheet,
+        l_retcode          type soi_ret_string.
+
+  data: lt_signature type sbdst_signature,
+        lw_signature type bapisignat,
+        lt_uri       type sbdst_uri,
+        lw_uri       type bapiuri,
+        lt_sheet     type soi_sheets_table,
+        lw_sheet     type soi_sheets.
+
+  data: lt_fields   type standard table of rfc_fields,
+        lv_last_row type i,
+        lv_last_col type i.
+call method c_oi_container_control_creator=>get_container_control
+    importing
+      control = l_iref_control
+      retcode = l_retcode.
+
+  check l_retcode = c_oi_errors=>ret_ok.
+
+  call method l_iref_control->init_control // инициализация открытия шаблона pv_template из BDS
+    exporting
+      r3_application_name      = pv_template
+      inplace_enabled          = 'X'
+      inplace_scroll_documents = 'X'
+      parent                   = l_oref_container
+    importing
+      retcode                  = l_retcode.
+
+  check l_retcode = c_oi_errors=>ret_ok.
+
+  create object l_iref_template.
+  lw_signature-prop_name  = 'DESCRIPTION'.
+  lw_signature-prop_value = pv_template.
+  append lw_signature to lt_signature.
+
+  refresh lt_uri.
+  call method l_iref_template->get_with_url
+    exporting
+      classname       = 'SOFFICEINTEGRATION'
+      classtype       = 'OT'
+      object_key      = 'SOFFICEINTEGRATION'
+    changing
+      uris            = lt_uri
+      signature       = lt_signature
+    exceptions
+      nothing_found   = 1
+      error_kpro      = 2
+      internal_error  = 3
+      parameter_error = 4
+      not_authorized  = 5
+      not_allowed     = 6.
+
+  clear lw_uri.
+  read table lt_uri into lw_uri index 1.
+  check sy-subrc = 0.
+
+  call method l_iref_control->get_document_proxy
+    exporting
+      document_type  = 'Excel.Sheet'
+    importing
+      document_proxy = l_iref_document
+      retcode        = l_retcode.
+
+  check l_retcode = c_oi_errors=>ret_ok.
+
+  call method l_iref_document->open_document
+    exporting
+      document_url = lw_uri-uri
+      open_inplace = 'X'
+    importing
+      retcode      = l_retcode.
+
+  check l_retcode = c_oi_errors=>ret_ok.
+
+  free l_iref_error.
+  call method l_iref_document->get_spreadsheet_interface
+    importing
+      error           = l_iref_error
+      sheet_interface = l_iref_spreadsheet.
+
+  call method l_iref_spreadsheet->get_sheets
+    importing
+      sheets = lt_sheet
+      error  = l_iref_error.
+
+  check l_iref_error->error_code = c_oi_errors=>ret_ok.
+
+  clear lw_sheet.
+  read table lt_sheet into lw_sheet index 1.
+  check sy-subrc = 0.
+
+  call method l_iref_spreadsheet->select_sheet
+    exporting
+      name  = lw_sheet-sheet_name
+    importing
+      error = l_iref_error.
+
+  check l_iref_error->error_code = c_oi_errors=>ret_ok.
+
+  refresh lt_fields.
+  call function 'DP_GET_FIELDS_FROM_TABLE' // получение состава полей lt_fields передаваемой таблицы pt_excel
+    tables
+      data   = pt_excel
+      fields = lt_fields.
+
+  lv_last_row = lines( pt_excel ).
+  lv_last_col = lines( lt_fields ).
+
+  call method l_iref_spreadsheet->set_selection // выделение левого верхнего угла
+    exporting
+      left    = 1
+      top     = 1
+      rows    = lv_last_row
+      columns = lv_last_col.
+
+  call method l_iref_spreadsheet->insert_range // выделение диапазона
+    exporting
+      columns = lv_last_col
+      rows    = lv_last_row
+      name    = pv_template.
+
+  call method l_iref_spreadsheet->insert_one_table // собственно, вставка данных в Excel
+    exporting
+      data_table   = pt_excel[]
+      fields_table = lt_fields
+      rangename    = pv_template.
+…
+
+  call method l_iref_document->execute_macro // запуск макроса MakeFormat из модуля Module1
+    exporting
+      macro_string = 'Module1.MakeFormat'
+      param1       = lv_last_row
+      param_count  = 1
+    importing
+      error        = l_iref_error
+      retcode      = l_retcode
+…
+  concatenate  pv_file sy-uzeit '.xls' into pv_file.
+  call method l_iref_document->save_as
+    exporting
+      file_name = pv_file.
+
+  call method l_iref_document->release_document
+    importing
+      retcode = l_retcode.
+
+  free: l_iref_spreadsheet,
+        l_iref_document.
+
+  call method l_iref_control->release_all_documents.
+  call method l_iref_control->destroy_control.
