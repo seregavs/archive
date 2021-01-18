@@ -1,0 +1,124 @@
+class ZCL_POSWH_UTILS definition
+  public
+  final
+  create public .
+
+public section.
+
+  methods CONSTRUCTOR .
+  methods ADDREC_01
+    importing
+      !I_REF_DOC_NO type /BI0/OIREF_DOC_NO .
+  methods GET_RESULT_01
+    returning
+      value(O_DATA) type ZPOSWHUTIL_RESULT_01_TAB .
+  methods CLEAR_IT
+    importing
+      !I_IT type EEW_NUMC2
+      !I_ALL type CHAR1 .
+protected section.
+private section.
+
+  data LA_GUID_01 type SYSUUID_X16 .
+  data LT_GUID_01 type ZPOSWHUTIL_GUID_01_TAB .
+ENDCLASS.
+
+
+
+CLASS ZCL_POSWH_UTILS IMPLEMENTATION.
+
+
+  METHOD addrec_01.
+    DATA: ls_guid_01  TYPE zposwhutil_guid_01_str.
+    ls_guid_01-kguid = la_guid_01.
+    ls_guid_01-ref_doc_no = i_ref_doc_no.
+    APPEND ls_guid_01 TO lt_guid_01.
+  ENDMETHOD.
+
+
+  METHOD clear_it.
+    CASE i_it.
+      WHEN '01'.
+        CLEAR: lt_guid_01.
+*        IF i_all = 'X'.
+*          DELETE FROM zposwhutil_pk01.
+*        ELSE.
+*          DELETE FROM zposwhutil_pk01 WHERE kguid = la_guid_01.
+*        ENDIF.
+    ENDCASE.
+  ENDMETHOD.
+
+
+  METHOD constructor.
+* GUID creation - see 935047 - Creating and using GUIDs (UUIDs)
+*    DATA: l_uuid_x16 TYPE sysuuid_x16.
+    DATA: oref TYPE REF TO cx_uuid_error.
+    TRY.
+        la_guid_01 = cl_system_uuid=>create_uuid_x16_static( ). " create uuid_x16
+      CATCH cx_uuid_error INTO oref. " catch error
+        DATA: s1 TYPE string.
+        s1 = oref->get_text( ).
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD get_result_01.
+* вставка записей в физическую таблицу. Отменено, т.к. используется индивидуальный SELECT для ref_doc_no вместо JOIN
+*  (join оказывается очень expensive в плане выполнения)
+     SORT lt_guid_01.
+     DELETE ADJACENT DUPLICATES FROM lt_guid_01.
+*    INSERT zposwhutil_pk01 FROM TABLE lt_guid_01.
+*    COMMIT WORK.
+
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception,
+      lt_res       TYPE REF TO data,
+      lt_res2      TYPE zposwhutil_result_01_tab.
+
+* HANA DB hints
+* http://help-legacy.sap.com/saphelp_hanaplatform/helpdata/en/4b/a9edce1f2347a0b9fcda99879c17a1/content.htm
+
+    LOOP AT lt_guid_01 ASSIGNING FIELD-SYMBOL(<fs_guid_01>).
+      CLEAR: lt_res.
+      DATA(lv_stmt) =
+  |        SELECT t1.ref_doc_no, "/BIC/CARD12" AS card12 | &
+  |               ,"/BIC/CARDKIND" AS cardkind | &
+  |               ,"/BIC/CRECNUM" AS crecnum | &
+  |               ,time | &
+  |               ,material | &
+  |               ,debitor | &
+  |               ,calday | &
+  |               ,SUM( "/BIC/ZRT_PREDR" ) AS zrt_predr | &
+  |               ,loc_currcy | &
+  |               ,SUM( cpsaexcubu ) AS cpsaexcubu | &
+  |               ,SUM( cpsaexcusu ) AS cpsaexcusu | &
+  |               ,base_uom | &
+  |               ,sales_unit | &
+  |          FROM "POSDWH"."RO_V_POS_REC_ITM" t1| &
+  |          WHERE t1.ref_doc_no = '{ <fs_guid_01>-ref_doc_no }' AND t1.rt_paydir = '1' | &
+  |          GROUP BY t1.ref_doc_no, t1."/BIC/CARD12", t1."/BIC/CARDKIND", | &
+  |                   t1."/BIC/CRECNUM", t1.time, t1.material, t1.debitor, t1.calday, loc_currcy, base_uom, sales_unit | &
+  |          ORDER BY ref_doc_no, material, debitor, calday |.
+      TRY.
+          GET REFERENCE OF lt_res2 INTO lt_res.
+          lo_conn = cl_sql_connection=>get_connection( ).
+          lo_statement = lo_conn->create_statement( ).
+          DATA(l_res_ref) = lo_statement->execute_query( lv_stmt ).
+          l_res_ref->set_param_table( lt_res ).
+          l_res_ref->next_package( ).
+          l_res_ref->close( ).
+          IF lt_res2 IS NOT INITIAL.
+            APPEND LINES OF lt_res2 TO o_data.
+          ENDIF.
+        CATCH cx_sql_exception INTO lx_sql.
+          MESSAGE e037(zposwh) WITH '01'.
+          WRITE: / | Ошибка получения таблицы результатов для guid 01 { me->la_guid_01 } |.
+          WRITE: / lx_sql->get_text( ).
+          WRITE: / lx_sql->sql_code.
+          WRITE: / lx_sql->sql_message.
+      ENDTRY.
+    ENDLOOP.
+  ENDMETHOD.
+ENDCLASS.

@@ -1,0 +1,39 @@
+*&---------------------------------------------------------------------*
+*& Report  ZPOSWH_EXPORT_STEP
+*&
+*&---------------------------------------------------------------------*
+*& Шаг выполнения цепочки экспорта данных в orcl
+*&
+*&---------------------------------------------------------------------*
+REPORT zposwh_export_step.
+
+SELECTION-SCREEN BEGIN OF BLOCK part1 WITH FRAME TITLE text-001.
+PARAMETERS:
+  p_group  RADIOBUTTON GROUP rad1,
+  p_update RADIOBUTTON GROUP rad1,
+  p_finish RADIOBUTTON GROUP rad1,
+  p_unlock RADIOBUTTON GROUP rad1,
+  p_prep   RADIOBUTTON GROUP rad1.
+SELECTION-SCREEN END OF BLOCK part1.
+
+SELECTION-SCREEN BEGIN OF BLOCK part2 WITH FRAME TITLE text-002.
+PARAMETERS:
+  p_exdsc(20) TYPE c OBLIGATORY,                      " схема в orcl
+  p_hdbtb(20) TYPE c OBLIGATORY,                      " таблица в HANA
+  p_clear     TYPE c AS CHECKBOX DEFAULT ABAP_TRUE,   " Удаление данных в staging-таблицах перед началом работы. Нужно для дельта-выгрузки
+  p_grpid     TYPE zpos_id2 DEFAULT '01',             " номер группы в параллельной выгрузке
+  p_runexd    TYPE c AS CHECKBOX DEFAULT ABAP_FALSE,  " Запуск процесса в orcl по выгрузке
+  p_deact     TYPE c AS CHECKBOX DEFAULT ABAP_TRUE,   " Деактивировать исх.потоки в orcl - X
+  p_lock      TYPE c AS CHECKBOX DEFAULT ABAP_TRUE.   " Х - ставить или снимать блокировку в зависимости от действия
+SELECTION-SCREEN END OF BLOCK part2.
+
+
+
+
+CASE abap_true.
+  WHEN p_finish.    NEW zcl_poswh_api( exd_schema = p_exdsc )->finish_delta_loading( in_hdbtable = p_hdbtb ).
+  WHEN p_group.     NEW zcl_poswh_api( exd_schema = p_exdsc )->make_pos_group( in_hdbtable = p_hdbtb in_clear = p_clear ).
+  WHEN p_unlock.    NEW zcl_poswh_api( exd_schema = p_exdsc )->release_lock_exd( in_hdbtable = p_hdbtb in_runexd = p_runexd in_lock = p_lock in_deactflow = p_deact ).
+  WHEN p_update.    NEW zcl_poswh_api( exd_schema = p_exdsc )->insert_pos_group( in_hdbtable = p_hdbtb in_groupid = p_grpid ).
+  WHEN p_prep.      NEW zcl_poswh_api( exd_schema = p_exdsc )->set_flow_prepare( in_hdbtable = p_hdbtb in_clear = p_clear in_deactflow = p_deact in_lock = p_lock ).
+ENDCASE.

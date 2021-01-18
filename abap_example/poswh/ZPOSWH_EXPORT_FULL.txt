@@ -1,0 +1,135 @@
+REPORT zposwh_export_full MESSAGE-ID ZPOSWH.
+
+constants:
+  lc_chain_status_green TYPE C LENGTH 1 VALUE 'G'.
+
+PARAMETERS:
+  p_posro    TYPE char20     OBLIGATORY DEFAULT '/BIC/APNTO0352',
+  p_pchain   TYPE rspc_chain OBLIGATORY DEFAULT 'ZPOSWH_EXPORT_HDR_FULL',
+  p_begda    TYPE dats       OBLIGATORY,
+  p_endda    TYPE dats,
+  p_split    TYPE c AS CHECKBOX DEFAULT ABAP_TRUE.
+
+DATA:
+  lv_pchain TYPE rspc_chain,
+  lv_status TYPE rspc_state VALUE lc_chain_status_green,
+  lv_mtime  TYPE t,
+  lv_exdsch TYPE CHAR20,
+  lv_logid  TYPE rspc_logid.
+
+DATA(lv_currdate)  = p_begda.
+DATA(lv_hdb_table) = p_posro.
+
+lv_pchain = p_pchain.
+lv_exdsch = 'POSDWH'.
+
+IF ( p_begda > p_endda )  AND ( p_endda IS NOT INITIAL ).
+  MESSAGE e019.
+ENDIF.
+
+DATA(ls_wherecond) = VALUE zposwh_where(
+  mandt       = sy-mandt
+  hdb_table   = lv_hdb_table
+).
+
+SELECT SINGLE *
+  FROM zposwh_where
+ WHERE hdb_table = @lv_hdb_table
+ INTO @ls_wherecond.
+
+
+IF p_endda IS INITIAL.
+  p_endda = p_begda.
+ENDIF.
+
+
+ls_wherecond-begda = p_begda.
+ls_wherecond-endda = p_endda.
+ls_wherecond-whereclause = | ( CALDAY BETWEEN '{ p_begda }' AND '{ p_endda }' ) |.
+MODIFY zposwh_where from ls_wherecond.
+COMMIT WORK.
+
+WRITE: / p_posro, ' ', p_begda, ' - ', p_endda .
+
+
+" Установка блокировки, очистка staging и настройка потока (c установкой WHERE ). Делается 1 раз для всех цепочек.
+NEW zcl_poswh_api( exd_schema = lv_exdsch )->set_flow_prepare(
+  in_hdbtable  = lv_hdb_table
+  in_clear     = ABAP_TRUE
+  in_deactflow = ABAP_TRUE
+  in_lock      = ABAP_TRUE
+).
+
+
+" в цепочке не должно выполняться установка блокировок, очистка и настройка потока!!! Проверить варианты в цепочке!!!
+IF p_split = 'X'.
+
+  WRITE: / 'Начало выполнения цепочек: 1 выполнение на 1 сутки'.
+
+  WHILE lv_currdate <= p_endda AND lv_status = lc_chain_status_green.
+
+
+    ls_wherecond-begda       = lv_currdate.
+    ls_wherecond-endda       = lv_currdate.
+    ls_wherecond-whereclause = | ( CALDAY = '{ lv_currdate }' ) |.
+    MODIFY zposwh_where FROM ls_wherecond.
+    COMMIT WORK.
+
+    WRITE: / sy-index, ' ', lv_currdate, ' ', ls_wherecond-whereclause.
+
+    CALL FUNCTION 'Z_RSPC_CHAIN_EXEC'
+      EXPORTING
+        i_chain       = lv_pchain
+        i_event       = ''
+        i_synchronous = ABAP_FALSE
+        i_time        = lv_mtime
+      IMPORTING
+        e_logid       = lv_logid
+        e_status      = lv_status.
+
+    IF lv_status <> lc_chain_status_green.
+      WRITE:/ | Ошибка в журнале { lv_logid } дата = { lv_currdate }. Обработка прервана.|.
+      MESSAGE e035 WITH lv_logid lv_currdate.
+    ENDIF.
+
+    lv_currdate = lv_currdate + 1.
+  ENDWHILE.
+
+ELSE.
+
+  WRITE: / 'Начало выполнения 1 цепочки на весь интервал'.
+
+  CALL FUNCTION 'Z_RSPC_CHAIN_EXEC'
+    EXPORTING
+      i_chain       = lv_pchain
+      i_event       = ''
+      i_synchronous = ' '
+      i_time        = lv_mtime
+    IMPORTING
+      e_logid       = lv_logid
+      e_status      = lv_status.
+
+  IF lv_status <> lc_chain_status_green.
+    WRITE:/ | Ошибка в журнале { lv_logid }. Обработка прервана.|.
+    MESSAGE e036 WITH lv_logid.
+  ENDIF.
+
+ENDIF.
+
+
+
+NEW zcl_poswh_api(
+  exd_schema = lv_exdsch
+)->release_lock_exd(
+  in_hdbtable = lv_hdb_table
+  in_runexd   = ABAP_TRUE
+  in_lock     = ABAP_TRUE
+  in_deactflow = ABAP_TRUE
+).
+
+DELETE FROM zposwh_where
+  WHERE hdb_table = lv_hdb_table.
+
+COMMIT WORK.
+
+MESSAGE i034.
