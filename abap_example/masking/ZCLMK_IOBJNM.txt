@@ -1,0 +1,197 @@
+class ZCLMK_IOBJNM definition
+  public
+  final
+  create public .
+
+public section.
+
+  methods CONSTRUCTOR
+    importing
+      !I_ZMKRUN type ZMKRUN
+      !I_ZMKCONFIG type ZMKCONFIG
+      !I_IOBJNM type RSCHABASNM
+      !I_ZMKOBJTYPE type ZMKOBJTYPE .
+  methods MASK_ADSO_LIST .
+  methods GET_IOBJNM
+    returning
+      value(O_IOBJNM) type RSCHABASNM .
+protected section.
+private section.
+
+  data ZMKRUN type ZMKRUN .
+  data ZMKCONFIG type ZMKCONFIG .
+  data IOBJNM type RSCHABASNM .
+  data ZMKOBJTYPE type ZMKOBJTYPE .
+  data ZMKTYPE type ZMKTYPE .
+  data LANGU type LANGU .
+  data PREFIX_TEXT type CHAR20 .
+  data PREFIX_KEY type CHAR1 .
+  data IS_KEYGEN type CHAR1 .
+
+  methods CREATE_MASK_KEYS .
+  methods MASK_ADSO
+    importing
+      !I_AODSO type RSDODSOBJECT
+      !I_TARGET type ZMKTARGET .
+  methods FILL_ZMKKEYM
+    importing
+      !I_KEY_ORIG type ZMKKEYTYPE
+      !I_KEY_INDEX type INTEGER2 .
+  methods UPDATE_ADSO_TBL
+    importing
+      !I_ADSO_TBL type CATSTNAM .
+ENDCLASS.
+
+
+
+CLASS ZCLMK_IOBJNM IMPLEMENTATION.
+
+
+  METHOD constructor.
+    me->iobjnm = i_iobjnm.
+    me->zmkconfig = i_zmkconfig.
+    me->zmkrun = i_zmkrun.
+    me->zmkobjtype = i_zmkobjtype.
+
+    SELECT SINGLE * FROM zmkiobjmn INTO @DATA(ls_iobjn)
+     WHERE iobjmn = @me->iobjnm
+       AND zmkconfig = @me->zmkconfig
+       AND zmkobjtype = @me->zmkobjtype.
+    IF sy-subrc = 0.
+      me->langu = ls_iobjn-langu.
+      me->is_keygen = ls_iobjn-is_keygen.
+      me->prefix_key = ls_iobjn-prefix_key.
+      me->prefix_text = ls_iobjn-prefix_text.
+      me->zmktype = ls_iobjn-zmktype.
+    ENDIF.
+  ENDMETHOD.
+
+
+  method CREATE_MASK_KEYS.
+  endmethod.
+
+
+  METHOD fill_zmkkeym.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    DATA(lv_keymask) = |{ me->prefix_key }{ i_key_index }|.
+    DATA(lv_sql) =
+       |INSERT INTO "ZMKKEYM"(IOBJMN, KEY_ORIG, ZMKOBJTYPE, KEY_MASK) VALUES( '{ me->iobjnm }', '{ i_key_orig }','{ me->zmkobjtype }','{ lv_keymask }')|.
+    TRY.
+        " WRITE: / |{ lv_sql }|.
+        lo_conn = cl_sql_connection=>get_connection( ).
+        lo_statement = lo_conn->create_statement( ).
+        DATA(l_row_cnt) = lo_statement->execute_update( lv_sql ).
+
+      CATCH cx_sql_exception INTO lx_sql.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD get_iobjnm.
+    CASE me->zmkobjtype.
+      WHEN 'F'. o_iobjnm = me->iobjnm.
+      WHEN 'O'.
+        DATA(lv_c) = me->iobjnm+0(1).
+        CASE lv_c.
+          WHEN '0'. o_iobjnm = me->iobjnm+1(20).
+          WHEN OTHERS. o_iobjnm = |/BIC/{ me->iobjnm }|.
+        ENDCASE.
+      WHEN OTHERS. RETURN.
+    ENDCASE.
+  ENDMETHOD.
+
+
+  METHOD mask_adso.
+    DATA: lt_adsotable TYPE STANDARD TABLE OF string,
+          lo_conn      TYPE REF TO cl_sql_connection,
+          lo_statement TYPE REF TO cl_sql_statement,
+          lx_sql       TYPE REF TO cx_sql_exception,
+          lt_res       TYPE REF TO data,
+          lt_res2      TYPE zmkname_tbl,
+          lv_int2      TYPE integer2,
+          lv_adso_tbl  TYPE catstnam.
+
+    CASE i_target.
+      WHEN 1.  APPEND |/BIC/A{ i_aodso }1| TO lt_adsotable.
+      WHEN 2.  APPEND |/BIC/A{ i_aodso }2| TO lt_adsotable.
+      WHEN 4.  APPEND |/BIC/A{ i_aodso }1| TO lt_adsotable. APPEND |/BIC/A{ i_aodso }2| TO lt_adsotable.
+    ENDCASE.
+    IF lines( lt_adsotable ) = 0.
+      RETURN.
+    ENDIF.
+
+    LOOP AT lt_adsotable ASSIGNING FIELD-SYMBOL(<fs_adsotable>).
+      DATA(lv_sql) =
+         |SELECT DISTINCT "{ me->get_iobjnm( ) }" as MKVALUE FROM "{ <fs_adsotable> }" WHERE "{ me->get_iobjnm( ) }" <> ''|.
+      TRY.
+          WRITE: / |{ lv_sql }|.
+          GET REFERENCE OF lt_res2 INTO lt_res.
+          lo_conn = cl_sql_connection=>get_connection( ).
+          lo_statement = lo_conn->create_statement( ).
+          DATA(l_res_ref) = lo_statement->execute_query( lv_sql ).
+          l_res_ref->set_param_table( lt_res ).
+          l_res_ref->next_package( ).
+          l_res_ref->close( ).
+          IF lt_res2 IS NOT INITIAL.
+            IF me->zmktype = 1. " change texts
+            ENDIF.
+            IF me->zmktype = 2. " create mask keys and substitute
+              IF me->is_keygen = 'X'. " need to generate keys
+                LOOP AT lt_res2 ASSIGNING FIELD-SYMBOL(<fs_res2>).
+                  lv_int2 = sy-tabix.
+                  me->fill_zmkkeym( i_key_orig = <fs_res2>-mkvalue i_key_index = lv_int2 ). " generate mask key for every unique key_orig
+                ENDLOOP.
+              ENDIF.
+              lv_adso_tbl = <fs_adsotable>.
+              me->update_adso_tbl( i_adso_tbl = lv_adso_tbl  ).
+            ENDIF.
+          ENDIF.
+        CATCH cx_sql_exception INTO lx_sql.
+      ENDTRY.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD mask_adso_list.
+    SELECT * FROM zmkbinding INTO TABLE @DATA(lt_binding)
+     WHERE zmkconfig = @me->zmkconfig
+       AND zmkobjtype = @me->zmkobjtype
+       AND iobjmn = @me->iobjnm
+       AND is_active = 'X'.
+    IF sy-subrc NE 0.
+      RETURN.
+    ENDIF.
+    LOOP AT lt_binding ASSIGNING FIELD-SYMBOL(<fs_binding>).
+      me->mask_adso( i_aodso = <fs_binding>-aodso i_target = <fs_binding>-target ).
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD update_adso_tbl.
+    DATA:
+      lo_conn      TYPE REF TO cl_sql_connection,
+      lo_statement TYPE REF TO cl_sql_statement,
+      lx_sql       TYPE REF TO cx_sql_exception.
+
+    SELECT * FROM zmkkeym INTO TABLE @DATA(lt_zmkkeym)
+      WHERE iobjmn = @me->iobjnm
+        AND zmkobjtype = @me->zmkobjtype.
+    IF sy-dbcnt > 0.
+      LOOP AT lt_zmkkeym ASSIGNING FIELD-SYMBOL(<fs_zmkkeym>).
+        DATA(lv_sql) =
+           |UPDATE "{ i_adso_tbl }" SET "{ me->get_iobjnm( ) }" = '{ <fs_zmkkeym>-key_mask }' WHERE "{ me->get_iobjnm( ) }" = '{ <fs_zmkkeym>-key_orig }' |.
+        TRY.
+            lo_conn = cl_sql_connection=>get_connection( ).
+            lo_statement = lo_conn->create_statement( ).
+            " DATA(l_row_cnt) = lo_statement->execute_update( lv_sql ).
+
+          CATCH cx_sql_exception INTO lx_sql.
+        ENDTRY.
+      ENDLOOP.
+    ENDIF.
+  ENDMETHOD.
+ENDCLASS.
