@@ -10,7 +10,8 @@ public section.
       !I_ZMKRUN type ZMKRUN
       !I_ZMKCONFIG type ZMKCONFIG
       !I_IOBJNM type RSCHABASNM
-      !I_ZMKOBJTYPE type ZMKOBJTYPE .
+      !I_ZMKOBJTYPE type ZMKOBJTYPE
+      !I_LOG_PROTOCOL type BALOGNR .
   methods MASK_ADSO_LIST .
   methods GET_IOBJNM
     returning
@@ -27,8 +28,11 @@ private section.
   data PREFIX_TEXT type CHAR20 .
   data PREFIX_KEY type CHAR1 .
   data IS_KEYGEN type CHAR1 .
+  data LOG_PROTOCOL type BALOGNR .
+  data LOG_HANDLE type BALLOGHNDL .
+  data REF_IOBJNM type RSCHABASNM .
+  data REF_IOBJNM_TBL type ZMKKEYVAL_TBL .
 
-  methods CREATE_MASK_KEYS .
   methods MASK_ADSO
     importing
       !I_AODSO type RSDODSOBJECT
@@ -40,6 +44,7 @@ private section.
   methods UPDATE_ADSO_TBL
     importing
       !I_ADSO_TBL type CATSTNAM .
+  methods MARE_REF_IOBJNM_TBL .
 ENDCLASS.
 
 
@@ -52,6 +57,10 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
     me->zmkconfig = i_zmkconfig.
     me->zmkrun = i_zmkrun.
     me->zmkobjtype = i_zmkobjtype.
+    me->log_protocol = i_log_protocol.
+    IF me->log_protocol IS NOT INITIAL.
+      me->log_handle = cl_log_ppf=>load_log( me->log_protocol ).
+    ENDIF.
 
     SELECT SINGLE * FROM zmkiobjmn INTO @DATA(ls_iobjn)
      WHERE iobjmn = @me->iobjnm
@@ -63,12 +72,13 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
       me->prefix_key = ls_iobjn-prefix_key.
       me->prefix_text = ls_iobjn-prefix_text.
       me->zmktype = ls_iobjn-zmktype.
+      me->ref_iobjnm = ls_iobjn-ref_iobjmn.
+    ENDIF.
+
+    IF me->ref_iobjnm IS NOT INITIAL.
+      me->mare_ref_iobjnm_tbl( ).
     ENDIF.
   ENDMETHOD.
-
-
-  method CREATE_MASK_KEYS.
-  endmethod.
 
 
   METHOD fill_zmkkeym.
@@ -77,15 +87,21 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
       lo_statement TYPE REF TO cl_sql_statement,
       lx_sql       TYPE REF TO cx_sql_exception.
 
-    DATA(lv_keymask) = |{ me->prefix_key }{ i_key_index }|.
+    IF  me->ref_iobjnm IS INITIAL.
+      DATA(lv_keymask) = |{ me->prefix_key }{ i_key_index }|.
+    ELSE.
+      TRY.
+          lv_keymask = me->ref_iobjnm_tbl[ key_orig = i_key_orig ]-key_mask.
+        CATCH cx_sy_itab_line_not_found.
+          lv_keymask = |{ me->prefix_key }{ i_key_index }|.
+      ENDTRY.
+    ENDIF.
     DATA(lv_sql) =
        |INSERT INTO "ZMKKEYM"(IOBJMN, KEY_ORIG, ZMKOBJTYPE, KEY_MASK) VALUES( '{ me->iobjnm }', '{ i_key_orig }','{ me->zmkobjtype }','{ lv_keymask }')|.
     TRY.
-        " WRITE: / |{ lv_sql }|.
         lo_conn = cl_sql_connection=>get_connection( ).
         lo_statement = lo_conn->create_statement( ).
         DATA(l_row_cnt) = lo_statement->execute_update( lv_sql ).
-
       CATCH cx_sql_exception INTO lx_sql.
     ENDTRY.
   ENDMETHOD.
@@ -105,6 +121,16 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
   ENDMETHOD.
 
 
+  METHOD mare_ref_iobjnm_tbl.
+    CLEAR: me->ref_iobjnm_tbl.
+    SELECT key_orig, key_mask INTO TABLE @me->ref_iobjnm_tbl
+      FROM zmkkeym
+     WHERE iobjmn = @me->ref_iobjnm
+       AND zmkobjtype = @me->zmkobjtype
+     ORDER BY key_orig.
+  ENDMETHOD.
+
+
   METHOD mask_adso.
     DATA: lt_adsotable TYPE STANDARD TABLE OF string,
           lo_conn      TYPE REF TO cl_sql_connection,
@@ -113,7 +139,8 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
           lt_res       TYPE REF TO data,
           lt_res2      TYPE zmkname_tbl,
           lv_int2      TYPE integer2,
-          lv_adso_tbl  TYPE catstnam.
+          lv_adso_tbl  TYPE catstnam,
+          dummy        TYPE c.
 
     CASE i_target.
       WHEN 1.  APPEND |/BIC/A{ i_aodso }1| TO lt_adsotable.
@@ -124,11 +151,13 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
       RETURN.
     ENDIF.
 
+    MESSAGE i002(zmk) WITH me->get_iobjnm( ) i_aodso INTO dummy.
+    CALL METHOD cl_log_ppf=>add_message( ip_problemclass = '4' ip_handle = me->log_handle ).
+
     LOOP AT lt_adsotable ASSIGNING FIELD-SYMBOL(<fs_adsotable>).
       DATA(lv_sql) =
          |SELECT DISTINCT "{ me->get_iobjnm( ) }" as MKVALUE FROM "{ <fs_adsotable> }" WHERE "{ me->get_iobjnm( ) }" <> ''|.
       TRY.
-          WRITE: / |{ lv_sql }|.
           GET REFERENCE OF lt_res2 INTO lt_res.
           lo_conn = cl_sql_connection=>get_connection( ).
           lo_statement = lo_conn->create_statement( ).
@@ -141,6 +170,8 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
             ENDIF.
             IF me->zmktype = 2. " create mask keys and substitute
               IF me->is_keygen = 'X'. " need to generate keys
+                MESSAGE i003(zmk) WITH me->get_iobjnm( ) INTO dummy.
+                CALL METHOD cl_log_ppf=>add_message( ip_problemclass = '4' ip_handle = me->log_handle ).
                 LOOP AT lt_res2 ASSIGNING FIELD-SYMBOL(<fs_res2>).
                   lv_int2 = sy-tabix.
                   me->fill_zmkkeym( i_key_orig = <fs_res2>-mkvalue i_key_index = lv_int2 ). " generate mask key for every unique key_orig
@@ -153,6 +184,10 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
         CATCH cx_sql_exception INTO lx_sql.
       ENDTRY.
     ENDLOOP.
+
+    MESSAGE i005(zmk) WITH me->get_iobjnm( ) i_aodso INTO dummy.
+    CALL METHOD cl_log_ppf=>add_message( ip_problemclass = '4' ip_handle = me->log_handle ).
+
   ENDMETHOD.
 
 
@@ -175,12 +210,17 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
     DATA:
       lo_conn      TYPE REF TO cl_sql_connection,
       lo_statement TYPE REF TO cl_sql_statement,
-      lx_sql       TYPE REF TO cx_sql_exception.
+      lx_sql       TYPE REF TO cx_sql_exception,
+      dummy        TYPE c.
 
     SELECT * FROM zmkkeym INTO TABLE @DATA(lt_zmkkeym)
       WHERE iobjmn = @me->iobjnm
         AND zmkobjtype = @me->zmkobjtype.
     IF sy-dbcnt > 0.
+
+      MESSAGE i004(zmk) WITH me->get_iobjnm( ) i_adso_tbl INTO dummy.
+      CALL METHOD cl_log_ppf=>add_message( ip_problemclass = '4' ip_handle = me->log_handle ).
+
       LOOP AT lt_zmkkeym ASSIGNING FIELD-SYMBOL(<fs_zmkkeym>).
         DATA(lv_sql) =
            |UPDATE "{ i_adso_tbl }" SET "{ me->get_iobjnm( ) }" = '{ <fs_zmkkeym>-key_mask }' WHERE "{ me->get_iobjnm( ) }" = '{ <fs_zmkkeym>-key_orig }' |.
