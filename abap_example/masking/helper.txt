@@ -1,0 +1,32 @@
+*&---------------------------------------------------------------------*
+*& Report ZMK_HELPER
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmk_helper MESSAGE-ID zmk.
+
+"DATA: lt_mk_iobjnm    TYPE STANDARD TABLE OF REF TO zclmk_iobjnm.
+DATA(lv_zmkrun) = '00000001'.
+DATA: lv_s_log_handle TYPE balloghndl,
+      lv_log_protocol TYPE balognr.
+DATA: dummy(255)      TYPE c.
+
+" see demo report SBAL_DEMO_01
+
+lv_s_log_handle =  cl_log_ppf=>create_log( ).
+MESSAGE i000(zmk) WITH lv_zmkrun INTO dummy.
+CALL METHOD cl_log_ppf=>add_message( ip_problemclass = '4' ip_handle = lv_s_log_handle ).
+lv_log_protocol = cl_log_ppf=>save_log( ip_loghandle = lv_s_log_handle ).
+" create objects to be masked
+SELECT * FROM zmkiobjmn INTO TABLE @DATA(lt_iobjnm) WHERE zmkconfig = '1' ORDER BY orderby.
+LOOP AT lt_iobjnm ASSIGNING FIELD-SYMBOL(<fs_iobjnm>).
+  DATA(lo_iobjnm) = NEW zclmk_iobjnm( i_zmkrun = lv_zmkrun i_zmkconfig = <fs_iobjnm>-zmkconfig i_iobjnm = <fs_iobjnm>-iobjmn i_zmkobjtype = 'F' i_log_protocol = lv_log_protocol ).
+  lo_iobjnm->mask_adso_list( ).
+ENDLOOP.
+
+lv_s_log_handle = cl_log_ppf=>load_log( lv_log_protocol ).
+MESSAGE i001(zmk) WITH lv_zmkrun INTO dummy.
+CALL METHOD cl_log_ppf=>add_message( ip_problemclass = '4' ip_handle = lv_s_log_handle ).
+
+cl_log_ppf=>show_log( ip_protocol = lv_s_log_handle ).
+lv_log_protocol = cl_log_ppf=>save_log( ip_loghandle = lv_s_log_handle ).
