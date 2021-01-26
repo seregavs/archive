@@ -20,7 +20,7 @@ lv_log_protocol = cl_log_ppf=>save_log( ip_loghandle = lv_s_log_handle ).
 " create objects to be masked
 SELECT * FROM zmkiobjmn INTO TABLE @DATA(lt_iobjnm) WHERE zmkconfig = '1' ORDER BY orderby.
 LOOP AT lt_iobjnm ASSIGNING FIELD-SYMBOL(<fs_iobjnm>).
-  DATA(lo_iobjnm) = NEW zclmk_iobjnm( i_zmkrun = lv_zmkrun i_zmkconfig = <fs_iobjnm>-zmkconfig i_iobjnm = <fs_iobjnm>-iobjmn i_zmkobjtype = 'F' i_log_protocol = lv_log_protocol ).
+  DATA(lo_iobjnm) = NEW zclmk_iobjnm( i_zmkrun = lv_zmkrun i_zmkconfig = <fs_iobjnm>-zmkconfig i_iobjnm = <fs_iobjnm>-iobjmn i_zmkobjtype = <fs_iobjnm>-zmkobjtype i_log_protocol = lv_log_protocol ).
   lo_iobjnm->mask_adso_list( ).
 ENDLOOP.
 
