@@ -94,15 +94,20 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
       lx_sql          TYPE REF TO cx_sql_exception,
       lv_key_orig     TYPE zmkkeytype,
       lv_n6(6)        TYPE n,
+      lv_n5(5)        TYPE n,
       lv_key_index(5) TYPE n,
-      lv_keymask(20)  TYPE c.
+      lv_keymask(20)  TYPE c,
+      lv_checktbl(1)  TYPE c.
 
     lv_key_index = i_key_index.
-    IF  me->ref_iobjnm IS INITIAL. " no referemce table
+    IF i_key_orig = '00005'.
+      DATA(lv_i) = 1.
+    ENDIF.
+    IF  me->ref_iobjnm IS INITIAL. " no reference table
       IF me->zmkobjtype = 'F'. " field
         CASE me->iobjnm.
           WHEN 'ZBUACIATA'.
-            IF i_key_orig = 'RU'.
+            IF i_key_orig = 'SU'.
               lv_keymask = 'SR'.
             ELSE.
               lv_keymask = |{ me->prefix_key }{ lv_key_index }|.
@@ -115,29 +120,63 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
       TRY.
           IF me->zmkobjtype = 'F'. " field
             CASE me->iobjnm.
-              WHEN 'ZBUFLINUM' OR 'ZBUFLNAR' OR 'ZBUFLNDP' OR 'WR020FZZZ'. lv_key_orig = i_key_orig+1(5). "search for shorter value (without leading 0).
-              " all fields above are 6 characters
+              WHEN 'ZBUFLINUM' OR 'ZBUFLNAR' OR 'ZBUFLNDP' OR 'WR020FZZZ'.
+                lv_key_orig = i_key_orig+1(5). "search for shorter value (without leading 0).
+                lv_checktbl = 'X'.
+                " all fields above are 6 characters
               WHEN 'WR120FZZZ'. " text for airline code. take orig code from orig text by addiing leadings 0s.
                 lv_n6 = i_key_orig.
                 lv_key_orig = lv_n6.
-              WHEN OTHERS. lv_key_orig = i_key_orig.
+                lv_checktbl = 'X'.
+              WHEN OTHERS.
+                lv_key_orig = i_key_orig.
+                lv_checktbl = 'X'.
             ENDCASE.
           ELSEIF me->zmkobjtype = 'O'. " infoobject
             CASE me->iobjnm.
-              WHEN 'ZBUFLINUM'. lv_key_orig = i_key_orig+1(5). "search for shorter value (without leading 0)
-              " all iobjs above are 6 characters
-              WHEN OTHERS. lv_key_orig = i_key_orig.
+              WHEN 'ZBUFLINUM'.
+                " all iobjs above are 6 characters
+                lv_key_orig = i_key_orig+1(5). "search for shorter value (without leading 0)
+                lv_checktbl = 'X'.
+              WHEN 'ZBUFLTPAR'. " flights pairs. Example: 0134/01234
+                SPLIT i_key_orig AT '/' INTO TABLE DATA(lt_fltpar) IN CHARACTER MODE.
+                IF sy-subrc = 0.
+                  lv_keymask = ''.
+                  LOOP AT lt_fltpar ASSIGNING FIELD-SYMBOL(<fs_fltpar>).
+                    TRY.
+                        DATA(lv_tabix) = sy-tabix.
+                        lv_n5 = <fs_fltpar>.
+                        CASE lv_tabix.
+                          WHEN 1.
+                            lv_keymask = |{ me->ref_iobjnm_tbl[ key_orig = lv_n5 ]-key_mask }|.
+                          WHEN 2.
+                            lv_keymask = |{ lv_keymask }/{ me->ref_iobjnm_tbl[ key_orig = lv_n5 ]-key_mask }|.
+                        ENDCASE.
+                      CATCH cx_sy_itab_line_not_found.
+                        CASE lv_tabix.
+                          WHEN 1. lv_keymask = 'AAAA'.
+                          WHEN 2. lv_keymask = |{ lv_keymask }/BBBB|.
+                        ENDCASE.
+                    ENDTRY.
+                  ENDLOOP.
+                ELSE.
+                  lv_keymask = 'CCCC/BBBB'.
+                ENDIF.
+              WHEN OTHERS.
+                lv_key_orig = i_key_orig.
+                lv_checktbl = 'X'.
             ENDCASE.
           ENDIF.
-          lv_keymask = me->ref_iobjnm_tbl[ key_orig = lv_key_orig ]-key_mask.
+          IF lv_checktbl = 'X'.
+            lv_keymask = me->ref_iobjnm_tbl[ key_orig = lv_key_orig ]-key_mask.
+          ENDIF.
         CATCH cx_sy_itab_line_not_found.
           lv_keymask = |{ me->prefix_key }{ lv_key_index }|.
           DATA(lv_sql_ref) =
              |INSERT INTO "ZMKKEYM"(IOBJMN, KEY_ORIG, ZMKOBJTYPE, KEY_MASK) VALUES( '{ me->ref_iobjnm }', '{ i_key_orig }','{ me->zmkrefobjtype }','{ lv_keymask }')|.
+          DATA(lv_sql_ref2) = " Without this, next searching for 5-char original key returns false and new key mask is created.
+             |INSERT INTO "ZMKKEYM"(IOBJMN, KEY_ORIG, ZMKOBJTYPE, KEY_MASK) VALUES( '{ me->ref_iobjnm }', '{ lv_key_orig }','{ me->zmkrefobjtype }','{ lv_keymask }')|.
       ENDTRY.
-    ENDIF.
-    IF lv_keymask = '500607'.
-      DATA(lv_i) = 1.
     ENDIF.
     DATA(lv_sql) =
        |INSERT INTO "ZMKKEYM"(IOBJMN, KEY_ORIG, ZMKOBJTYPE, KEY_MASK) VALUES( '{ me->iobjnm }', '{ i_key_orig }','{ me->zmkobjtype }','{ lv_keymask }')|.
@@ -147,6 +186,7 @@ CLASS ZCLMK_IOBJNM IMPLEMENTATION.
         DATA(l_row_cnt) = lo_statement->execute_update( lv_sql ).
         IF lv_sql_ref IS NOT INITIAL.
           l_row_cnt = lo_statement->execute_update( lv_sql_ref ).
+          l_row_cnt = lo_statement->execute_update( lv_sql_ref2 ).
         ENDIF.
       CATCH cx_sql_exception INTO lx_sql.
     ENDTRY.
