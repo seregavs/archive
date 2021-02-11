@@ -1,4 +1,4 @@
-// update text in CDS DDL object
+" update text in CDS DDL object
 REPORT ZDDL_UPDTEXT.
 parameters:
   p_ddl  type ddlname obligatory,
