@@ -1,6 +1,6 @@
 REPORT ZA_MATERIALIZATION.
 
-// to elaborate "too many tables" problem
+" to elaborate "too many tables" problem
 
 DELETE FROM ZAMDATA.
 INSERT ZAMDATA FROM ( SELECT * FROM ZACDATA ).
