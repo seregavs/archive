@@ -35,11 +35,7 @@ class School:
         self.counter = self.counter + 1
 
 for i in range(maxPerson):
-    lastName = input(str(i) + ' last name: ')
-    firstName = input(str(i) + ' first name: ')
-    code = int(input(str(i) + ' school: '))
-    rating = int(input(str(i) + ' rating: '))
-    
+    code = int(input().split()[2])
     school = next((x for x in schoolList if x.code == code), None)
     if school == None:
         schoolList.append(School(code))
@@ -49,4 +45,4 @@ for i in range(maxPerson):
 schoolList.sort(key=lambda school: school.code)    
 # print(*schoolList, sep = "\n")
 for school in schoolList:
-    print(school.code)   
+    print(school.code) 
