@@ -8,7 +8,6 @@
 # Вывод
 # 10 9 9
 import random
-# intList = [1,9,-10,-20,-8, 7, 14, 0, 20, 20, -20]
 
 intList= []
 maxValues = 10
