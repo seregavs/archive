@@ -1,0 +1,43 @@
+report zdsepr_reload_month.
+
+parameters: p_cmonth(6) type c obligatory default '202109',
+            p_wtime     type i obligatory default 15.
+
+data: e_logid type rspc_logid.
+
+" update CALMONTH
+select single *
+       from tvarvc
+       where name = 'PNAME01' and type = 'P'
+       into @data(wa) BYPASSING BUFFER.
+if sy-subrc = 0.
+  update  tvarvc from @( value #( base wa low = p_cmonth ) ).
+endif.
+" update keyfigure sel. 01 - volume
+select single *
+       from tvarvc
+       where name = 'PNAME02' and type = 'P'
+       into @data(wb) BYPASSING BUFFER.
+if sy-subrc = 0.
+  update  tvarvc from @( value #( base wb low = '01' ) ).
+endif.
+commit work and wait.
+
+" sometimes 1st DTP doesn't read data from query!!
+wait up to p_wtime seconds.
+
+" run process chain
+call function 'RSPC_API_CHAIN_START'
+  exporting
+    i_chain = 'XXXXXXX'
+*   I_T_VARIABLES  =
+*   I_SYNCHRONOUS  =
+*   I_SIMULATE     =
+*   I_NOPLAN       =
+  importing
+    e_logid = e_logid
+  exceptions
+    failed  = 1
+    others  = 2.
+
+write: / |Process chain XXXXX started. log is  { e_logid }. Month is { p_cmonth }|.
